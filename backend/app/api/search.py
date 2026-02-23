@@ -1,0 +1,1341 @@
+import asyncio
+import hashlib
+import logging
+import re
+import time
+from datetime import datetime, timezone
+from typing import Any, Optional
+from urllib.parse import urlparse
+
+import httpx
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import Response
+
+from app.services.douban_explore_service import (
+    DOUBAN_SECTION_SOURCES,
+    fetch_douban_section,
+)
+from app.services.nullbr_service import nullbr_service
+from app.services.pansou_service import pansou_service
+from app.services.runtime_settings_service import runtime_settings_service
+from app.services.tmdb_service import tmdb_service
+from app.services.tmdb_explore_service import TMDB_SECTION_SOURCES, fetch_tmdb_section
+
+router = APIRouter(prefix="/search", tags=["search"])
+logger = logging.getLogger(__name__)
+
+POPULAR_MOVIES_URL = "https://popular-movies-data.stevenlu.com/movies.json"
+POPULAR_CACHE_TTL_SECONDS = 60 * 60 * 6
+PAN115_CACHE_TTL_SECONDS = 60 * 30
+POPULAR_SECTION_SOURCES = [
+    {
+        "key": "popular",
+        "title": "综合热度榜",
+        "tag": "Popular",
+        "url": "https://popular-movies-data.stevenlu.com/movies.json",
+    },
+    {
+        "key": "imdb7",
+        "title": "IMDb 7+",
+        "tag": "IMDb >= 7",
+        "url": "https://popular-movies-data.stevenlu.com/movies-imdb-min7.json",
+    },
+    {
+        "key": "rotten70",
+        "title": "烂番茄 70+",
+        "tag": "RT >= 70",
+        "url": "https://popular-movies-data.stevenlu.com/movies-rottentomatoes-min70.json",
+    },
+    {
+        "key": "metacritic70",
+        "title": "Metacritic 70+",
+        "tag": "MC >= 70",
+        "url": "https://popular-movies-data.stevenlu.com/movies-metacritic-min70.json",
+    },
+]
+
+_popular_movies_cache = {
+    "expires_at": 0.0,
+    "payload": None,
+}
+_popular_sections_cache = {
+    source["key"]: {"expires_at": 0.0, "payload": None}
+    for source in POPULAR_SECTION_SOURCES
+}
+_movie_pan115_cache: dict[str, dict] = {}
+_tv_pan115_cache: dict[str, dict] = {}
+_image_proxy_user_agent = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+)
+_pan115_share_url_pattern = re.compile(
+    r"(https?://(?:115(?:cdn)?\.com/s/[A-Za-z0-9]+(?:[^\s\"'<>]*)?|share\.115\.com/[A-Za-z0-9]+(?:[^\s\"'<>]*)?))",
+    re.IGNORECASE,
+)
+_pan115_receive_code_pattern = re.compile(
+    r"(?:提取码|提取碼|密码|密碼|password|pwd)\s*[:：=]?\s*([A-Za-z0-9]{4})",
+    re.IGNORECASE,
+)
+_pan115_share_code_hint_pattern = re.compile(
+    r"(?:分享码|分享碼|share(?:_|\s*)code)\s*[:：=]?\s*([A-Za-z0-9]{6,32})",
+    re.IGNORECASE,
+)
+
+
+def _extract_search_items(payload: Any) -> list[dict]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        return []
+
+    for key in ("items", "results", "list"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+
+    data = payload.get("data")
+    if isinstance(data, dict):
+        for key in ("items", "results", "list"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _is_115_share_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    host = (parsed.hostname or "").lower()
+    return (
+        "115.com" in host
+        or "115cdn.com" in host
+        or "anxia.com" in host
+    )
+
+
+def _is_likely_115_share_identifier(value: str) -> bool:
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+
+    if raw.startswith(("http://", "https://", "//")):
+        normalized = raw
+        if normalized.startswith("//"):
+            normalized = f"https:{normalized}"
+        return _is_115_share_url(normalized)
+
+    return bool(re.match(r"^[A-Za-z0-9]+(?:-[A-Za-z0-9]{4})?$", raw))
+
+
+def _extract_first_string_value(row: dict, keys: list[str]) -> str:
+    for key in keys:
+        value = row.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _iter_string_values(node: Any, depth: int = 0) -> list[str]:
+    if depth > 4:
+        return []
+    if isinstance(node, str):
+        text = node.strip()
+        return [text] if text else []
+    if isinstance(node, list):
+        values: list[str] = []
+        for item in node:
+            values.extend(_iter_string_values(item, depth + 1))
+        return values
+    if isinstance(node, dict):
+        values: list[str] = []
+        for value in node.values():
+            values.extend(_iter_string_values(value, depth + 1))
+        return values
+    return []
+
+
+def _extract_pan115_share_link_from_text(text: str, allow_plain_code: bool = False) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+
+    if raw.startswith("//"):
+        raw = f"https:{raw}"
+
+    url_match = _pan115_share_url_pattern.search(raw)
+    if url_match:
+        return url_match.group(1).strip()
+
+    if allow_plain_code and re.fullmatch(r"[A-Za-z0-9]{6,32}(?:-[A-Za-z0-9]{4})?", raw):
+        return raw
+
+    receive_code = ""
+    receive_match = _pan115_receive_code_pattern.search(raw)
+    if receive_match:
+        receive_code = receive_match.group(1).strip()
+
+    share_code_match = _pan115_share_code_hint_pattern.search(raw)
+    if share_code_match:
+        share_code = share_code_match.group(1).strip()
+        final_receive = receive_code
+        if final_receive and share_code:
+            return f"{share_code}-{final_receive}"
+        return share_code
+
+    return ""
+
+
+def _extract_pansou_share_link(row: dict) -> str:
+    prioritized_candidate = _extract_first_string_value(
+        row,
+        [
+            "share_link",
+            "share_url",
+            "url",
+            "link",
+            "resource_url",
+            "source_url",
+            "href",
+            "share_code",
+            "sharecode",
+            "code",
+        ],
+    )
+    if prioritized_candidate:
+        parsed = _extract_pan115_share_link_from_text(prioritized_candidate, allow_plain_code=True)
+        if parsed:
+            return parsed
+
+    for text in _iter_string_values(row):
+        parsed = _extract_pan115_share_link_from_text(text, allow_plain_code=False)
+        if parsed:
+            return parsed
+    return ""
+
+
+def _extract_pansou_rows(node: Any, depth: int = 0) -> list[dict]:
+    if depth > 5:
+        return []
+
+    rows: list[dict] = []
+    if isinstance(node, list):
+        for item in node:
+            if isinstance(item, dict):
+                rows.append(item)
+            rows.extend(_extract_pansou_rows(item, depth + 1))
+    elif isinstance(node, dict):
+        for value in node.values():
+            rows.extend(_extract_pansou_rows(value, depth + 1))
+    return rows
+
+
+def _normalize_pansou_items(payload: Any) -> list[dict]:
+    raw_rows = _extract_pansou_rows(payload)
+    normalized: list[dict] = []
+    seen: set[str] = set()
+
+    for index, row in enumerate(raw_rows):
+        if not isinstance(row, dict):
+            continue
+
+        share_url = _extract_pansou_share_link(row)
+
+        title = _extract_first_string_value(
+            row,
+            [
+                "title",
+                "name",
+                "resource_name",
+                "file_name",
+                "filename",
+                "text",
+            ],
+        )
+        if not title and not share_url:
+            continue
+        if not title:
+            title = "盘搜资源"
+
+        cloud_type = _extract_first_string_value(row, ["cloud_type", "cloud", "pan_type"]) or "115"
+        summary = _extract_first_string_value(row, ["summary", "desc", "description", "content"])
+        size = _extract_first_string_value(row, ["size"])
+        if size:
+            summary = f"{summary} | {size}" if summary else size
+
+        pan115_savable = _is_likely_115_share_identifier(share_url)
+
+        unique_key = f"{title}|{share_url}"
+        if unique_key in seen:
+            continue
+        seen.add(unique_key)
+
+        resource_id = row.get("id")
+        if resource_id is None:
+            resource_id = f"pansou-{hashlib.md5(unique_key.encode('utf-8')).hexdigest()[:12]}-{index}"
+
+        normalized.append(
+            {
+                "id": resource_id,
+                "media_type": "resource",
+                "title": title,
+                "name": title,
+                "overview": summary,
+                "poster_path": "",
+                "source_service": "pansou",
+                "pan115_share_link": share_url,
+                "pan115_savable": pan115_savable,
+                "raw_item": row,
+                "cloud_type": cloud_type,
+            }
+        )
+
+    return normalized
+
+
+def _build_pansou_search_result(query: str, page: int, payload: Any) -> dict:
+    items = _normalize_pansou_items(payload)
+    return {
+        "query": query,
+        "page": page,
+        "total_pages": 1 if items else 0,
+        "total_results": len(items),
+        "items": items,
+        "results": items,
+    }
+
+
+def _apply_source_service(items: list[dict], source_service: str) -> list[dict]:
+    normalized: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        row["source_service"] = row.get("source_service") or source_service
+        normalized.append(row)
+    return normalized
+
+
+def _extract_year_from_date_like(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    if len(text) >= 4 and text[:4].isdigit():
+        return text[:4]
+    return ""
+
+
+def _build_pansou_keyword_from_media(payload: dict, media_type: str) -> str:
+    if not isinstance(payload, dict):
+        return ""
+
+    if media_type == "tv":
+        title = str(payload.get("title") or payload.get("name") or "").strip()
+        date_like = payload.get("first_air_date") or payload.get("release_date") or payload.get("release")
+    else:
+        title = str(payload.get("title") or payload.get("name") or "").strip()
+        date_like = payload.get("release_date") or payload.get("release")
+
+    year = _extract_year_from_date_like(date_like)
+    if title and year:
+        return f"{title} {year}"
+    return title
+
+
+def _normalize_pansou_pan115_list(payload: Any) -> list[dict]:
+    rows = _extract_pansou_rows(payload)
+    items: list[dict] = []
+    seen_links: set[str] = set()
+
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+
+        share_link = _extract_pansou_share_link(row)
+        if not _is_likely_115_share_identifier(share_link):
+            continue
+
+        # 基于 share_link 去重，避免同一个分享链接出现多次
+        link_key = share_link.strip().lower()
+        if link_key in seen_links:
+            continue
+        seen_links.add(link_key)
+
+        title = _extract_first_string_value(
+            row,
+            ["title", "name", "resource_name", "file_name", "filename", "text"],
+        )
+        if not title or title == "盘搜资源":
+            # 尝试从 share_link 中提取更有意义的标题
+            title = f"115资源 #{len(items) + 1}"
+
+        size = _extract_first_string_value(row, ["size"])
+        resolution = _extract_first_string_value(row, ["resolution"])
+        quality = _extract_first_string_value(row, ["quality"])
+
+        resource_id = row.get("id")
+        if resource_id is None:
+            resource_id = f"pansou-pan115-{hashlib.md5(link_key.encode('utf-8')).hexdigest()[:12]}-{index}"
+
+        items.append(
+            {
+                "id": resource_id,
+                "title": title,
+                "size": size,
+                "resolution": resolution,
+                "quality": quality,
+                "share_link": share_link,
+                "source_service": "pansou",
+                "raw_item": row,
+            }
+        )
+
+    return items
+
+
+def _mark_nullbr_pan115_source(items: list[dict]) -> list[dict]:
+    marked: list[dict] = []
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        item["source_service"] = item.get("source_service") or "nullbr"
+        marked.append(item)
+    return marked
+
+
+def _is_allowed_image_proxy_url(raw_url: str) -> bool:
+    try:
+        parsed = urlparse(raw_url)
+    except Exception:
+        return False
+
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+
+    if host == "doubanio.com" or host.endswith(".doubanio.com"):
+        return True
+    if host == "image.tmdb.org":
+        return True
+    return False
+
+
+def _normalize_popular_items(raw_items):
+    if not isinstance(raw_items, list):
+        raise ValueError("invalid popular movies response format")
+
+    items = []
+    for index, item in enumerate(raw_items):
+        if not isinstance(item, dict):
+            continue
+
+        tmdb_id = item.get("tmdb_id")
+        movie_id = tmdb_id or item.get("id")
+        if not movie_id:
+            continue
+
+        genres = item.get("genres") or []
+        if not isinstance(genres, list):
+            genres = []
+        intro = " / ".join(genres[:3]) if genres else "热门电影推荐"
+
+        poster_url = item.get("poster_url") or ""
+        if isinstance(poster_url, str) and poster_url.startswith("http://"):
+            poster_url = poster_url.replace("http://", "https://", 1)
+
+        items.append(
+            {
+                "rank": index + 1,
+                "id": movie_id,
+                "tmdb_id": tmdb_id,
+                "media_type": "movie",
+                "title": item.get("title") or "",
+                "year": item.get("year"),
+                "poster_url": poster_url,
+                "imdb_id": item.get("imdb_id"),
+                "intro": intro,
+                "genres": genres,
+            }
+        )
+    return items
+
+
+def _get_cached_payload(cache: dict, key: str):
+    cache_item = cache.get(key)
+    if not cache_item:
+        return None, False
+    payload = cache_item.get("payload")
+    expires_at = cache_item.get("expires_at", 0.0)
+    is_fresh = time.time() < expires_at
+    return payload, is_fresh
+
+
+def _set_cached_payload(cache: dict, key: str, payload: dict, ttl_seconds: int):
+    cache[key] = {
+        "payload": payload,
+        "expires_at": time.time() + ttl_seconds,
+    }
+
+
+def _find_douban_source(section_key: str):
+    return next((source for source in DOUBAN_SECTION_SOURCES if source["key"] == section_key), None)
+
+
+def _find_tmdb_source(section_key: str):
+    return next((source for source in TMDB_SECTION_SOURCES if source["key"] == section_key), None)
+
+
+async def _fetch_popular_section(source, refresh):
+    key = source["key"]
+    now = time.time()
+    cache_item = _popular_sections_cache[key]
+
+    if (
+        not refresh
+        and cache_item["payload"] is not None
+        and now < cache_item["expires_at"]
+    ):
+        return cache_item["payload"]
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(source["url"])
+            response.raise_for_status()
+            raw_items = response.json()
+
+        items = _normalize_popular_items(raw_items)
+        payload = {
+            "key": source["key"],
+            "title": source["title"],
+            "tag": source["tag"],
+            "source_url": source["url"],
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "total": len(items),
+            "items": items,
+        }
+        cache_item["payload"] = payload
+        cache_item["expires_at"] = now + POPULAR_CACHE_TTL_SECONDS
+        return payload
+    except Exception as exc:
+        if cache_item["payload"] is not None:
+            return cache_item["payload"]
+        raise exc
+
+
+@router.get("")
+async def search(
+    query: str = Query(..., description="Search keyword"),
+    page: int = Query(1, ge=1, description="Page number"),
+):
+    keyword = str(query or "").strip()
+    if not keyword:
+        raise HTTPException(status_code=400, detail="Search keyword is required")
+
+    try:
+        payload = await tmdb_service.search_multi(keyword, page)
+        if not isinstance(payload, dict):
+            payload = {}
+        return payload
+    except ValueError as exc:
+        if "TMDB_API_KEY is not configured" in str(exc):
+            raise HTTPException(status_code=400, detail="TMDB API Key 未配置")
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"TMDB 搜索失败: {str(exc)}")
+
+
+@router.get("/explore/popular")
+async def get_explore_popular_movies(
+    limit: int = Query(30, ge=1, le=200, description="Number of items to return"),
+    refresh: bool = Query(False, description="Force refresh cache"),
+):
+    source = POPULAR_SECTION_SOURCES[0]
+    try:
+        payload = await _fetch_popular_section(source, refresh)
+        _popular_movies_cache["payload"] = payload
+        _popular_movies_cache["expires_at"] = time.time() + POPULAR_CACHE_TTL_SECONDS
+        return {
+            "source": payload["source_url"],
+            "fetched_at": payload["fetched_at"],
+            "total": payload["total"],
+            "items": payload.get("items", [])[:limit],
+        }
+    except Exception as exc:
+        if _popular_movies_cache["payload"] is not None:
+            cached_payload = _popular_movies_cache["payload"]
+            return {
+                "source": cached_payload.get("source_url", POPULAR_MOVIES_URL),
+                "fetched_at": cached_payload.get("fetched_at"),
+                "total": cached_payload.get("total", 0),
+                "items": cached_payload.get("items", [])[:limit],
+            }
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to fetch recommendations: {str(exc)}",
+        )
+
+
+@router.get("/explore/popular-sections")
+async def get_explore_popular_sections(
+    limit: int = Query(24, ge=1, le=100, description="Number of items per section"),
+    refresh: bool = Query(False, description="Force refresh cache"),
+):
+    tasks = [_fetch_popular_section(source, refresh) for source in POPULAR_SECTION_SOURCES]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    sections = []
+    errors = []
+    for source, result in zip(POPULAR_SECTION_SOURCES, results):
+        if isinstance(result, Exception):
+            errors.append({"key": source["key"], "error": str(result)})
+            continue
+        if not isinstance(result, dict):
+            errors.append({"key": source["key"], "error": "Invalid section payload"})
+            continue
+        sections.append(
+            {
+                "key": result["key"],
+                "title": result["title"],
+                "tag": result["tag"],
+                "source_url": result["source_url"],
+                "fetched_at": result["fetched_at"],
+                "total": result["total"],
+                "items": result.get("items", [])[:limit],
+            }
+        )
+
+    if not sections:
+        raise HTTPException(status_code=502, detail="Failed to fetch all recommendation sections")
+
+    return {
+        "source": "popular-movies-data.stevenlu.com",
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "sections": sections,
+        "errors": errors,
+    }
+
+
+@router.get("/explore/douban-sections")
+async def get_explore_douban_sections(
+    limit: int = Query(24, ge=1, le=100, description="Number of items per section"),
+    refresh: bool = Query(False, description="Force refresh cache"),
+):
+    async with httpx.AsyncClient(timeout=12.0, http2=True) as client:
+        tasks = [
+            fetch_douban_section(source, limit, refresh, client=client)
+            for source in DOUBAN_SECTION_SOURCES
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    sections = []
+    errors = []
+    for source, result in zip(DOUBAN_SECTION_SOURCES, results):
+        if isinstance(result, Exception):
+            errors.append({"key": source["key"], "error": str(result)})
+            continue
+        if not isinstance(result, dict):
+            errors.append({"key": source["key"], "error": "Invalid section payload"})
+            continue
+        sections.append(
+            {
+                "key": result["key"],
+                "title": result["title"],
+                "tag": result["tag"],
+                "source_url": result["source_url"],
+                "fetched_at": result["fetched_at"],
+                "total": result["total"],
+                "items": result.get("items", [])[:limit],
+            }
+        )
+
+    if not sections:
+        fallback = await get_explore_popular_sections(limit=limit, refresh=refresh)
+        fallback_source = fallback.get("source", "popular-movies-data.stevenlu.com")
+        fallback_errors = fallback.get("errors", [])
+        return {
+            "source": f"fallback:{fallback_source}",
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "sections": fallback.get("sections", []),
+            "errors": errors + fallback_errors,
+        }
+
+    return {
+        "source": "douban-frodo",
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "sections": sections,
+        "errors": errors,
+    }
+
+
+@router.get("/explore/sections")
+async def get_explore_sections(
+    source: str = Query("douban", pattern="^(douban|tmdb)$", description="Explore source"),
+    limit: int = Query(24, ge=1, le=100, description="Number of items per section"),
+    refresh: bool = Query(False, description="Force refresh cache"),
+):
+    normalized_source = source if source in {"douban", "tmdb"} else "douban"
+
+    if normalized_source == "tmdb":
+        async with httpx.AsyncClient(timeout=12.0, http2=True) as client:
+            tasks = [
+                fetch_tmdb_section(section, limit, refresh, client=client)
+                for section in TMDB_SECTION_SOURCES
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        sections = []
+        errors = []
+        for section, result in zip(TMDB_SECTION_SOURCES, results):
+            if isinstance(result, Exception):
+                errors.append({"key": section["key"], "error": str(result)})
+                continue
+            if not isinstance(result, dict):
+                errors.append({"key": section["key"], "error": "Invalid TMDB section payload"})
+                continue
+            sections.append(
+                {
+                    "key": result["key"],
+                    "title": result["title"],
+                    "tag": result["tag"],
+                    "source_url": result["source_url"],
+                    "fetched_at": result["fetched_at"],
+                    "total": result["total"],
+                    "items": result.get("items", [])[:limit],
+                }
+            )
+
+        if not sections:
+            if errors:
+                first_error = str(errors[0].get("error") or "")
+                if "TMDB_API_KEY is not configured" in first_error:
+                    raise HTTPException(status_code=400, detail="TMDB API Key 未配置")
+            raise HTTPException(status_code=502, detail="Failed to fetch TMDB explore sections")
+
+        return {
+            "source": "tmdb",
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "sections": sections,
+            "errors": errors,
+        }
+
+    async with httpx.AsyncClient(timeout=12.0, http2=True) as client:
+        tasks = [
+            fetch_douban_section(section, limit, refresh, client=client)
+            for section in DOUBAN_SECTION_SOURCES
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    sections = []
+    errors = []
+    for section, result in zip(DOUBAN_SECTION_SOURCES, results):
+        if isinstance(result, Exception):
+            errors.append({"key": section["key"], "error": str(result)})
+            continue
+        if not isinstance(result, dict):
+            errors.append({"key": section["key"], "error": "Invalid Douban section payload"})
+            continue
+        sections.append(
+            {
+                "key": result["key"],
+                "title": result["title"],
+                "tag": result["tag"],
+                "source_url": result["source_url"],
+                "fetched_at": result["fetched_at"],
+                "total": result["total"],
+                "items": result.get("items", [])[:limit],
+            }
+        )
+
+    if not sections:
+        fallback = await get_explore_popular_sections(limit=limit, refresh=refresh)
+        fallback_source = fallback.get("source", "popular-movies-data.stevenlu.com")
+        fallback_errors = fallback.get("errors", [])
+        return {
+            "source": f"fallback:{fallback_source}",
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "sections": fallback.get("sections", []),
+            "errors": errors + fallback_errors,
+        }
+
+    return {
+        "source": "douban-frodo",
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "sections": sections,
+        "errors": errors,
+    }
+
+
+@router.get("/explore/section/{section_key}")
+async def get_explore_section(
+    section_key: str,
+    source: str = Query("douban", pattern="^(douban|tmdb)$", description="Explore source"),
+    limit: int = Query(30, ge=1, le=50, description="Number of items to return per request"),
+    start: int = Query(0, ge=0, le=5000, description="Start offset for batched loading"),
+    refresh: bool = Query(False, description="Force refresh cache"),
+):
+    normalized_source = source if source in {"douban", "tmdb"} else "douban"
+
+    if normalized_source == "tmdb":
+        section = _find_tmdb_source(section_key)
+        if not section:
+            raise HTTPException(status_code=404, detail=f"Unknown section key: {section_key}")
+
+        try:
+            payload = await fetch_tmdb_section(section, limit, refresh, start=start)
+        except Exception as exc:
+            if "TMDB_API_KEY is not configured" in str(exc):
+                raise HTTPException(status_code=400, detail="TMDB API Key 未配置")
+            raise HTTPException(status_code=502, detail=f"Failed to fetch section: {str(exc)}")
+
+        return {
+            "source": "tmdb",
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "section": {
+                "key": payload["key"],
+                "title": payload["title"],
+                "tag": payload["tag"],
+                "source_url": payload["source_url"],
+                "fetched_at": payload["fetched_at"],
+                "total": payload["total"],
+                "start": payload.get("start", start),
+                "count": payload.get("count", limit),
+                "items": payload.get("items", []),
+            },
+        }
+
+    section = _find_douban_source(section_key)
+    if not section:
+        raise HTTPException(status_code=404, detail=f"Unknown section key: {section_key}")
+
+    try:
+        payload = await fetch_douban_section(section, limit, refresh, start=start)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch section: {str(exc)}")
+
+    return {
+        "source": "douban-frodo",
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "section": {
+            "key": payload["key"],
+            "title": payload["title"],
+            "tag": payload["tag"],
+            "source_url": payload["source_url"],
+            "fetched_at": payload["fetched_at"],
+            "total": payload["total"],
+            "start": payload.get("start", start),
+            "count": payload.get("count", limit),
+            "items": payload.get("items", []),
+        },
+    }
+
+
+@router.get("/explore/douban-section/{section_key}")
+async def get_explore_douban_section(
+    section_key: str,
+    limit: int = Query(30, ge=1, le=50, description="Number of items to return per request"),
+    start: int = Query(0, ge=0, le=5000, description="Start offset for batched loading"),
+    refresh: bool = Query(False, description="Force refresh cache"),
+):
+    source = _find_douban_source(section_key)
+    if not source:
+        raise HTTPException(status_code=404, detail=f"Unknown section key: {section_key}")
+
+    try:
+        payload = await fetch_douban_section(source, limit, refresh, start=start)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch section: {str(exc)}")
+
+    return {
+        "source": "douban-frodo",
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "section": {
+            "key": payload["key"],
+            "title": payload["title"],
+            "tag": payload["tag"],
+            "source_url": payload["source_url"],
+            "fetched_at": payload["fetched_at"],
+            "total": payload["total"],
+            "start": payload.get("start", start),
+            "count": payload.get("count", limit),
+            "items": payload.get("items", []),
+        },
+    }
+
+
+@router.get("/explore/poster")
+async def proxy_explore_poster(
+    url: str = Query(..., description="Poster image url"),
+):
+    if not _is_allowed_image_proxy_url(url):
+        raise HTTPException(status_code=400, detail="Poster url is not allowed")
+
+    headers = {
+        "User-Agent": _image_proxy_user_agent,
+        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Referer": "https://m.douban.com/",
+        "Origin": "https://m.douban.com",
+        "Cache-Control": "no-cache",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+            image_resp = await client.get(url, headers=headers)
+            image_resp.raise_for_status()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch poster: {str(exc)}")
+
+    content_type = image_resp.headers.get("content-type", "image/jpeg")
+    return Response(
+        content=image_resp.content,
+        media_type=content_type,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@router.get("/list/{list_id}")
+def get_list(
+    list_id: int,
+    page: int = Query(1, ge=1, description="Page number"),
+):
+    result = nullbr_service.get_list(list_id, page)
+    return result
+
+
+@router.get("/movie/{tmdb_id}")
+async def get_movie(tmdb_id: int):
+    try:
+        return await tmdb_service.get_movie_detail(tmdb_id)
+    except ValueError as exc:
+        if "TMDB_API_KEY is not configured" in str(exc):
+            raise HTTPException(status_code=400, detail="TMDB API Key 未配置")
+        raise HTTPException(status_code=400, detail=str(exc))
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code if exc.response else 502
+        if status == 404:
+            raise HTTPException(status_code=404, detail="影视不存在")
+        raise HTTPException(status_code=502, detail=f"TMDB 详情获取失败({status})")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"TMDB 详情获取失败: {str(exc)}")
+
+
+def _build_pan115_response(
+    tmdb_id: int,
+    media_type: str,
+    page: int,
+    resource_list: list[dict],
+    search_service: str,
+    source_counts: Optional[dict[str, int]] = None,
+    attempts: Optional[list[dict[str, Any]]] = None,
+    keyword: str = "",
+) -> dict[str, Any]:
+    return {
+        "id": tmdb_id,
+        "media_type": media_type,
+        "page": page,
+        "total_page": 1,
+        "list": resource_list,
+        "resource_order": [search_service],
+        "search_service": search_service,
+        "source_counts": source_counts or {},
+        "attempts": attempts or [],
+        "keyword": keyword,
+    }
+
+
+def _resource_fallback_payload(
+    *,
+    tmdb_id: int,
+    media_type: str,
+    error: str,
+    season_number: int | None = None,
+    episode_number: int | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "id": tmdb_id,
+        "media_type": media_type,
+        "list": [],
+        "error": error,
+    }
+    if season_number is not None:
+        payload["season_number"] = season_number
+    if episode_number is not None:
+        payload["episode_number"] = episode_number
+    if media_type == "tv" and episode_number is not None:
+        payload["tv_show_id"] = tmdb_id
+    return payload
+
+
+def _call_nullbr_resource(fetcher, fallback_payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        result = fetcher()
+        if isinstance(result, dict):
+            result.setdefault("list", [])
+            return result
+        fallback_payload["error"] = "上游资源返回格式异常"
+        return fallback_payload
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code if exc.response else None
+        message = f"Nullbr资源接口异常({status})" if status else "Nullbr资源接口异常"
+        logger.warning("Nullbr resource request failed: %s", str(exc))
+        fallback_payload["error"] = message
+        return fallback_payload
+    except Exception as exc:
+        logger.warning("Nullbr resource request failed: %s", str(exc))
+        fallback_payload["error"] = f"资源获取失败: {str(exc)}"
+        return fallback_payload
+
+
+async def _load_media_payload(tmdb_id: int, media_type: str) -> dict:
+    try:
+        if media_type == "tv":
+            payload = await tmdb_service.get_tv_detail(tmdb_id)
+        else:
+            payload = await tmdb_service.get_movie_detail(tmdb_id)
+    except ValueError:
+        return {}
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+async def _search_pansou_pan115_resources(tmdb_id: int, media_type: str) -> tuple[str, list[dict]]:
+    pansou_service.set_base_url(runtime_settings_service.get_pansou_base_url())
+    media_payload = await _load_media_payload(tmdb_id, media_type)
+
+    pansou_keyword = _build_pansou_keyword_from_media(media_payload, media_type)
+    if not pansou_keyword:
+        pansou_keyword = f"TMDB {tmdb_id}"
+
+    pansou_payload = await pansou_service.search_115(pansou_keyword, res="results")
+    pansou_list = _normalize_pansou_pan115_list(pansou_payload)
+    return pansou_keyword, pansou_list
+
+
+@router.get("/movie/{tmdb_id}/115")
+async def get_movie_pan115(tmdb_id: int, page: int = Query(1, ge=1)):
+    cache_key = f"{tmdb_id}:{page}:nullbr"
+    cached_payload, is_fresh = _get_cached_payload(_movie_pan115_cache, cache_key)
+    if is_fresh:
+        return cached_payload
+
+    attempts: list[dict[str, Any]] = []
+    source_counts: dict[str, int] = {}
+    nullbr_list: list[dict] = []
+
+    try:
+        nullbr_payload = await asyncio.to_thread(nullbr_service.get_movie_pan115, tmdb_id, page)
+        nullbr_list = _mark_nullbr_pan115_source(
+            list(nullbr_payload.get("list", [])) if isinstance(nullbr_payload, dict) else []
+        )
+        attempts.append({"service": "nullbr", "status": "ok", "count": len(nullbr_list)})
+        if nullbr_list:
+            source_counts["nullbr"] = len(nullbr_list)
+    except Exception as exc:
+        attempts.append({"service": "nullbr", "status": "error", "error": str(exc)})
+
+    result = _build_pan115_response(
+        tmdb_id=tmdb_id,
+        media_type="movie",
+        page=page,
+        resource_list=nullbr_list,
+        search_service="nullbr",
+        source_counts=source_counts,
+        attempts=attempts,
+    )
+    result["can_try_pansou"] = True
+
+    _set_cached_payload(_movie_pan115_cache, cache_key, result, PAN115_CACHE_TTL_SECONDS)
+    return result
+
+
+@router.get("/movie/{tmdb_id}/115/pansou")
+async def get_movie_pan115_with_pansou(tmdb_id: int, page: int = Query(1, ge=1)):
+    cache_key = f"{tmdb_id}:{page}:pansou"
+    cached_payload, is_fresh = _get_cached_payload(_movie_pan115_cache, cache_key)
+    if is_fresh:
+        return cached_payload
+
+    attempts: list[dict[str, Any]] = []
+    pansou_list: list[dict] = []
+    pansou_keyword = ""
+
+    try:
+        pansou_keyword, pansou_list = await _search_pansou_pan115_resources(tmdb_id, "movie")
+        attempts.append({"service": "pansou", "status": "ok", "count": len(pansou_list)})
+    except Exception as exc:
+        attempts.append({"service": "pansou", "status": "error", "error": str(exc)})
+
+    source_counts = {"pansou": len(pansou_list)} if pansou_list else {}
+    result = _build_pan115_response(
+        tmdb_id=tmdb_id,
+        media_type="movie",
+        page=page,
+        resource_list=pansou_list,
+        search_service="pansou",
+        source_counts=source_counts,
+        attempts=attempts,
+        keyword=pansou_keyword,
+    )
+
+    _set_cached_payload(_movie_pan115_cache, cache_key, result, PAN115_CACHE_TTL_SECONDS)
+    return result
+
+
+@router.get("/movie/{tmdb_id}/magnet")
+def get_movie_magnet(tmdb_id: int):
+    fallback = _resource_fallback_payload(tmdb_id=tmdb_id, media_type="movie", error="")
+    return _call_nullbr_resource(lambda: nullbr_service.get_movie_magnet(tmdb_id), fallback)
+
+
+@router.get("/movie/{tmdb_id}/ed2k")
+def get_movie_ed2k(tmdb_id: int):
+    fallback = _resource_fallback_payload(tmdb_id=tmdb_id, media_type="movie", error="")
+    return _call_nullbr_resource(lambda: nullbr_service.get_movie_ed2k(tmdb_id), fallback)
+
+
+@router.get("/movie/{tmdb_id}/video")
+def get_movie_video(tmdb_id: int):
+    fallback = _resource_fallback_payload(tmdb_id=tmdb_id, media_type="movie", error="")
+    return _call_nullbr_resource(lambda: nullbr_service.get_movie_video(tmdb_id), fallback)
+
+
+@router.get("/tv/{tmdb_id}")
+async def get_tv(tmdb_id: int):
+    try:
+        return await tmdb_service.get_tv_detail(tmdb_id)
+    except ValueError as exc:
+        if "TMDB_API_KEY is not configured" in str(exc):
+            raise HTTPException(status_code=400, detail="TMDB API Key 未配置")
+        raise HTTPException(status_code=400, detail=str(exc))
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code if exc.response else 502
+        if status == 404:
+            raise HTTPException(status_code=404, detail="影视不存在")
+        raise HTTPException(status_code=502, detail=f"TMDB 详情获取失败({status})")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"TMDB 详情获取失败: {str(exc)}")
+
+
+@router.get("/tv/{tmdb_id}/115")
+async def get_tv_pan115(tmdb_id: int, page: int = Query(1, ge=1)):
+    cache_key = f"{tmdb_id}:{page}:nullbr"
+    cached_payload, is_fresh = _get_cached_payload(_tv_pan115_cache, cache_key)
+    if is_fresh:
+        return cached_payload
+
+    attempts: list[dict[str, Any]] = []
+    source_counts: dict[str, int] = {}
+    nullbr_list: list[dict] = []
+
+    try:
+        nullbr_payload = await asyncio.to_thread(nullbr_service.get_tv_pan115, tmdb_id, page)
+        nullbr_list = _mark_nullbr_pan115_source(
+            list(nullbr_payload.get("list", [])) if isinstance(nullbr_payload, dict) else []
+        )
+        attempts.append({"service": "nullbr", "status": "ok", "count": len(nullbr_list)})
+        if nullbr_list:
+            source_counts["nullbr"] = len(nullbr_list)
+    except Exception as exc:
+        attempts.append({"service": "nullbr", "status": "error", "error": str(exc)})
+
+    result = _build_pan115_response(
+        tmdb_id=tmdb_id,
+        media_type="tv",
+        page=page,
+        resource_list=nullbr_list,
+        search_service="nullbr",
+        source_counts=source_counts,
+        attempts=attempts,
+    )
+    result["can_try_pansou"] = True
+
+    _set_cached_payload(_tv_pan115_cache, cache_key, result, PAN115_CACHE_TTL_SECONDS)
+    return result
+
+
+@router.get("/tv/{tmdb_id}/115/pansou")
+async def get_tv_pan115_with_pansou(tmdb_id: int, page: int = Query(1, ge=1)):
+    cache_key = f"{tmdb_id}:{page}:pansou"
+    cached_payload, is_fresh = _get_cached_payload(_tv_pan115_cache, cache_key)
+    if is_fresh:
+        return cached_payload
+
+    attempts: list[dict[str, Any]] = []
+    pansou_list: list[dict] = []
+    pansou_keyword = ""
+
+    try:
+        pansou_keyword, pansou_list = await _search_pansou_pan115_resources(tmdb_id, "tv")
+        attempts.append({"service": "pansou", "status": "ok", "count": len(pansou_list)})
+    except Exception as exc:
+        attempts.append({"service": "pansou", "status": "error", "error": str(exc)})
+
+    source_counts = {"pansou": len(pansou_list)} if pansou_list else {}
+    result = _build_pan115_response(
+        tmdb_id=tmdb_id,
+        media_type="tv",
+        page=page,
+        resource_list=pansou_list,
+        search_service="pansou",
+        source_counts=source_counts,
+        attempts=attempts,
+        keyword=pansou_keyword,
+    )
+
+    _set_cached_payload(_tv_pan115_cache, cache_key, result, PAN115_CACHE_TTL_SECONDS)
+    return result
+
+
+@router.get("/tv/{tmdb_id}/season/{season_number}")
+async def get_tv_season(tmdb_id: int, season_number: int):
+    try:
+        return await tmdb_service.get_tv_season_detail(tmdb_id, season_number)
+    except ValueError as exc:
+        if "TMDB_API_KEY is not configured" in str(exc):
+            raise HTTPException(status_code=400, detail="TMDB API Key 未配置")
+        raise HTTPException(status_code=400, detail=str(exc))
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code if exc.response else 502
+        if status == 404:
+            raise HTTPException(status_code=404, detail="季信息不存在")
+        raise HTTPException(status_code=502, detail=f"TMDB 季信息获取失败({status})")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"TMDB 季信息获取失败: {str(exc)}")
+
+
+@router.get("/tv/{tmdb_id}/season/{season_number}/magnet")
+def get_tv_season_magnet(tmdb_id: int, season_number: int):
+    fallback = _resource_fallback_payload(
+        tmdb_id=tmdb_id,
+        media_type="tv",
+        season_number=season_number,
+        error="",
+    )
+    return _call_nullbr_resource(lambda: nullbr_service.get_tv_season_magnet(tmdb_id, season_number), fallback)
+
+
+@router.get("/tv/{tmdb_id}/season/{season_number}/episode/{episode_number}")
+async def get_tv_episode(tmdb_id: int, season_number: int, episode_number: int):
+    try:
+        return await tmdb_service.get_tv_episode_detail(tmdb_id, season_number, episode_number)
+    except ValueError as exc:
+        if "TMDB_API_KEY is not configured" in str(exc):
+            raise HTTPException(status_code=400, detail="TMDB API Key 未配置")
+        raise HTTPException(status_code=400, detail=str(exc))
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code if exc.response else 502
+        if status == 404:
+            raise HTTPException(status_code=404, detail="集信息不存在")
+        raise HTTPException(status_code=502, detail=f"TMDB 集信息获取失败({status})")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"TMDB 集信息获取失败: {str(exc)}")
+
+
+@router.get("/tv/{tmdb_id}/season/{season_number}/episode/{episode_number}/magnet")
+def get_tv_episode_magnet(tmdb_id: int, season_number: int, episode_number: int):
+    fallback = _resource_fallback_payload(
+        tmdb_id=tmdb_id,
+        media_type="tv",
+        season_number=season_number,
+        episode_number=episode_number,
+        error="",
+    )
+    return _call_nullbr_resource(
+        lambda: nullbr_service.get_tv_episode_magnet(tmdb_id, season_number, episode_number),
+        fallback,
+    )
+
+
+@router.get("/tv/{tmdb_id}/season/{season_number}/episode/{episode_number}/ed2k")
+def get_tv_episode_ed2k(tmdb_id: int, season_number: int, episode_number: int):
+    fallback = _resource_fallback_payload(
+        tmdb_id=tmdb_id,
+        media_type="tv",
+        season_number=season_number,
+        episode_number=episode_number,
+        error="",
+    )
+    return _call_nullbr_resource(
+        lambda: nullbr_service.get_tv_episode_ed2k(tmdb_id, season_number, episode_number),
+        fallback,
+    )
+
+
+@router.get("/tv/{tmdb_id}/season/{season_number}/episode/{episode_number}/video")
+def get_tv_episode_video(tmdb_id: int, season_number: int, episode_number: int):
+    fallback = _resource_fallback_payload(
+        tmdb_id=tmdb_id,
+        media_type="tv",
+        season_number=season_number,
+        episode_number=episode_number,
+        error="",
+    )
+    return _call_nullbr_resource(
+        lambda: nullbr_service.get_tv_episode_video(tmdb_id, season_number, episode_number),
+        fallback,
+    )
+
+
+@router.get("/tv/{tmdb_id}/magnet")
+def get_tv_magnet(
+    tmdb_id: int,
+    season: Optional[int] = Query(None, description="Season"),
+    episode: Optional[int] = Query(None, description="Episode"),
+):
+    fallback = _resource_fallback_payload(
+        tmdb_id=tmdb_id,
+        media_type="tv",
+        season_number=season,
+        episode_number=episode,
+        error="",
+    )
+    return _call_nullbr_resource(lambda: nullbr_service.get_tv_magnet(tmdb_id, season, episode), fallback)
+
+
+@router.get("/tv/{tmdb_id}/ed2k")
+def get_tv_ed2k(
+    tmdb_id: int,
+    season: Optional[int] = Query(None, description="Season"),
+    episode: Optional[int] = Query(None, description="Episode"),
+):
+    fallback = _resource_fallback_payload(
+        tmdb_id=tmdb_id,
+        media_type="tv",
+        season_number=season,
+        episode_number=episode,
+        error="",
+    )
+    return _call_nullbr_resource(lambda: nullbr_service.get_tv_ed2k(tmdb_id, season, episode), fallback)
+
+
+@router.get("/tv/{tmdb_id}/video")
+def get_tv_video(
+    tmdb_id: int,
+    season: Optional[int] = Query(None, description="Season"),
+    episode: Optional[int] = Query(None, description="Episode"),
+):
+    fallback = _resource_fallback_payload(
+        tmdb_id=tmdb_id,
+        media_type="tv",
+        season_number=season,
+        episode_number=episode,
+        error="",
+    )
+    return _call_nullbr_resource(lambda: nullbr_service.get_tv_video(tmdb_id, season, episode), fallback)
+
+
+@router.get("/collection/{collection_id}")
+def get_collection(collection_id: int):
+    result = nullbr_service.get_collection(collection_id)
+    return result
+
+
+@router.get("/collection/{collection_id}/115")
+def get_collection_pan115(collection_id: int, page: int = Query(1, ge=1)):
+    result = nullbr_service.get_collection_pan115(collection_id, page)
+    return result
