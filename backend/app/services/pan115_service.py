@@ -397,8 +397,9 @@ class Pan115Service:
             "offset": offset,
             "limit": limit
         }
-        # share_snap 是静态方法，直接用类调用
-        result = await P115Client.share_snap(payload, async_=True)
+        # Use client-bound call so request context (cookie/session headers) is applied.
+        # Class-level invocation can be blocked by upstream anti-bot and return 405.
+        result = await self._async_call("share_snap", payload)
         data = check_response(result)
         # 确保返回的是字典格式，包含 list 字段
         if isinstance(data, list):
@@ -542,7 +543,7 @@ class Pan115Service:
             "cid": pid,
             "receive_code": receive_code
         }
-        max_attempts = 8
+        max_attempts = 5
         last_error_text = ""
         for attempt in range(max_attempts):
             try:
@@ -579,7 +580,7 @@ class Pan115Service:
                 return {"state": True, "data": data}
             return data if isinstance(data, dict) else {"state": True, "data": data}
 
-        retry_hint = f"115转存失败(风控/临时错误已重试{max_attempts}次)"
+        retry_hint = f"115转存失败(已自动重试{max_attempts}次)"
         if last_error_text:
             return {"state": False, "error": f"{retry_hint}: {last_error_text}"}
         return {"state": False, "error": retry_hint}

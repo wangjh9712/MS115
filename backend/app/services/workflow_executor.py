@@ -106,13 +106,14 @@ class WorkflowExecutor:
 
     async def _action_save_share_to_115(self, **kwargs) -> tuple[bool, str]:
         from app.services.pan115_service import pan115_service
+        from app.services.runtime_settings_service import runtime_settings_service
 
         params = kwargs.get("params") or {}
         context = kwargs.get("context") or {}
 
         share_url = str(params.get("share_url") or context.get("share_url") or "").strip()
         folder_name = str(params.get("folder_name") or context.get("folder_name") or "").strip()
-        parent_id = str(params.get("parent_id") or context.get("parent_id") or "0").strip()
+        parent_id = str(runtime_settings_service.get_pan115_default_folder().get("folder_id") or "0").strip() or "0"
         receive_code = str(params.get("receive_code") or context.get("receive_code") or "").strip()
         tmdb_id_raw = params.get("tmdb_id") or context.get("tmdb_id")
 

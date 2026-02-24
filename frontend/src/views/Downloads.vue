@@ -29,7 +29,7 @@
       <template #header>
         <div class="card-header">
           <span>离线任务列表（{{ offlineTasks.length }}）</span>
-          <el-button type="danger" size="small" :disabled="offlineTasks.length === 0" @click="handleClearTasks">
+          <el-button type="danger" size="small" :disabled="completedCount === 0" @click="handleClearTasks">
             清空已完成
           </el-button>
         </div>
@@ -380,8 +380,8 @@ const handleDeleteTask = async (row) => {
 }
 
 const handleClearTasks = async () => {
-  if (offlineTasks.value.length === 0) {
-    ElMessage.info('当前没有可清空的任务')
+  if (completedCount.value === 0) {
+    ElMessage.info('当前没有可清空的已完成任务')
     return
   }
 
@@ -389,12 +389,12 @@ const handleClearTasks = async () => {
     const completedOnlyText = completedCount.value > 0
       ? `（当前已完成 ${completedCount.value} 个）`
       : ''
-    await ElMessageBox.confirm(`确定要清空离线任务列表吗？${completedOnlyText}`, '提示', {
+    await ElMessageBox.confirm(`确定要清空已完成离线任务吗？${completedOnlyText}`, '提示', {
       type: 'warning'
     })
-    await pan115Api.clearOfflineTasks('all')
+    await pan115Api.clearOfflineTasks('completed')
     await fetchOfflineTasks()
-    ElMessage.success('已清空离线任务列表')
+    ElMessage.success('已清空已完成任务')
   } catch (error) {
     if (error !== 'cancel') {
       ElMessage.error('操作失败')

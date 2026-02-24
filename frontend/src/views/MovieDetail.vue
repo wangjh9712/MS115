@@ -137,36 +137,87 @@
         </el-tab-pane>
 
         <el-tab-pane label="磁力链接" name="magnet">
-          <div v-loading="magnetLoading">
-            <el-table 
-              v-if="magnetResources.length > 0" 
-              :data="magnetResources" 
-              stripe
-              class="resource-table"
-            >
-              <el-table-column label="资源名称" min-width="400" show-overflow-tooltip>
-                <template #default="{ row }">
-                  <span class="resource-name">{{ row.name }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="大小" width="120" align="center">
-                <template #default="{ row }">
-                  <span class="resource-size">{{ formatSize(row.size) || '-' }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="操作" width="160" align="center" fixed="right">
-                <template #default="{ row }">
-                  <el-button type="primary" size="small" @click="handleSaveMagnet(row)">
-                    离线
-                  </el-button>
-                  <el-button size="small" @click="handleCopyMagnet(row.magnet)">
-                    复制
-                  </el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-            <el-empty v-else description="暂无磁力资源" />
-          </div>
+          <el-tabs v-model="magnetSourceTab" class="source-tabs">
+            <el-tab-pane label="Nullbr" name="nullbr">
+              <div v-loading="magnetLoading">
+                <el-table
+                  v-if="nullbrMagnetResources.length > 0"
+                  :data="nullbrMagnetResources"
+                  stripe
+                  class="resource-table"
+                >
+                  <el-table-column label="资源名称" min-width="400" show-overflow-tooltip>
+                    <template #default="{ row }">
+                      <span class="resource-name">{{ row.name }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="大小" width="120" align="center">
+                    <template #default="{ row }">
+                      <span class="resource-size">{{ formatSize(row.size) || '-' }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="160" align="center" fixed="right">
+                    <template #default="{ row }">
+                      <el-button type="primary" size="small" @click="handleSaveMagnet(row)">
+                        离线
+                      </el-button>
+                      <el-button size="small" @click="handleCopyMagnet(row.magnet)">
+                        复制
+                      </el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+                <el-empty v-else description="Nullbr 暂无磁力资源" />
+              </div>
+            </el-tab-pane>
+
+            <el-tab-pane label="SeedHub" name="seedhub">
+              <div class="resource-tools">
+                <el-button
+                  size="small"
+                  type="primary"
+                  plain
+                  :loading="seedhubMagnetLoading"
+                  @click="handleFetchSeedhubMagnet"
+                >
+                  {{ seedhubMagnetTried ? '重新尝试 SeedHub' : '用 SeedHub 获取磁链' }}
+                </el-button>
+              </div>
+              <div v-loading="seedhubMagnetLoading">
+                <el-table
+                  v-if="seedhubMagnetResources.length > 0"
+                  :data="seedhubMagnetResources"
+                  stripe
+                  class="resource-table"
+                >
+                  <el-table-column label="资源名称" min-width="400" show-overflow-tooltip>
+                    <template #default="{ row }">
+                      <span class="resource-name">{{ row.name }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="大小" width="120" align="center">
+                    <template #default="{ row }">
+                      <span class="resource-size">{{ formatSize(row.size) || '-' }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="160" align="center" fixed="right">
+                    <template #default="{ row }">
+                      <el-button type="primary" size="small" @click="handleSaveMagnet(row)">
+                        离线
+                      </el-button>
+                      <el-button size="small" @click="handleCopyMagnet(row.magnet)">
+                        复制
+                      </el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+                <el-empty
+                  v-else
+                  :description="seedhubMagnetTried ? 'SeedHub 暂无磁力资源' : '尚未获取 SeedHub 资源'"
+                />
+              </div>
+            </el-tab-pane>
+          </el-tabs>
         </el-tab-pane>
 
         <el-tab-pane label="ED2K" name="ed2k">
@@ -208,7 +259,7 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted, watch } from 'vue'
+import { computed, ref, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { searchApi, subscriptionApi, pan115Api } from '@/api'
@@ -221,6 +272,7 @@ const activeTab = ref('pan115')
 
 const pan115Resources = ref([])
 const pan115SourceTab = ref('nullbr')
+const magnetSourceTab = ref('nullbr')
 const magnetResources = ref([])
 const ed2kResources = ref([])
 
@@ -228,6 +280,10 @@ const pan115Loading = ref(false)
 const pansouLoading = ref(false)
 const pansouTried = ref(false)
 const magnetLoading = ref(false)
+const seedhubMagnetLoading = ref(false)
+const seedhubMagnetTried = ref(false)
+const seedhubMagnetTaskId = ref('')
+let seedhubPollTimer = null
 const ed2kLoading = ref(false)
 const isSubscribed = ref(false)
 const subscriptionId = ref(null)
@@ -280,6 +336,14 @@ const pansouPan115Resources = computed(() =>
   pan115Resources.value.filter((item) => item?.source_service === 'pansou')
 )
 
+const nullbrMagnetResources = computed(() =>
+  magnetResources.value.filter((item) => (item?.source_service || 'nullbr') === 'nullbr')
+)
+
+const seedhubMagnetResources = computed(() =>
+  magnetResources.value.filter((item) => item?.source_service === 'seedhub')
+)
+
 const mergePan115Resources = (primaryList = [], secondaryList = []) => {
   const merged = []
   const seen = new Set()
@@ -288,6 +352,21 @@ const mergePan115Resources = (primaryList = [], secondaryList = []) => {
     const shareLink = String(item.share_link || '').trim()
     const title = String(item.title || '').trim()
     const key = `${shareLink}|${title}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    merged.push(item)
+  }
+  return merged
+}
+
+const mergeMagnetResources = (primaryList = [], secondaryList = []) => {
+  const merged = []
+  const seen = new Set()
+  for (const item of [...primaryList, ...secondaryList]) {
+    if (!item || typeof item !== 'object') continue
+    const magnet = String(item.magnet || '').trim()
+    if (!magnet) continue
+    const key = magnet.toLowerCase()
     if (seen.has(key)) continue
     seen.add(key)
     merged.push(item)
@@ -383,7 +462,10 @@ const fetchMagnet = async () => {
   magnetLoading.value = true
   try {
     const { data } = await searchApi.getMovieMagnet(route.params.id)
-    magnetResources.value = data.list || []
+    const nullbrList = Array.isArray(data.list) ? data.list : []
+    const markedNullbrList = nullbrList.map((item) => ({ ...item, source_service: item?.source_service || 'nullbr' }))
+    const existingSeedhub = magnetResources.value.filter((item) => item?.source_service === 'seedhub')
+    magnetResources.value = mergeMagnetResources(markedNullbrList, existingSeedhub)
     if (data?.error) {
       ElMessage.warning(`磁力资源暂不可用：${data.error}`)
     }
@@ -391,6 +473,80 @@ const fetchMagnet = async () => {
     console.error('Failed to fetch magnet:', error)
   } finally {
     magnetLoading.value = false
+  }
+}
+
+const handleFetchSeedhubMagnet = async () => {
+  if (seedhubMagnetLoading.value) return
+  seedhubMagnetLoading.value = true
+  seedhubMagnetTried.value = true
+
+  stopSeedhubTaskPolling()
+  try {
+    const { data } = await searchApi.createMovieSeedhubMagnetTask(route.params.id)
+    const taskId = String(data?.task_id || '')
+    if (!taskId) {
+      throw new Error('未获取到任务ID')
+    }
+    seedhubMagnetTaskId.value = taskId
+    await pollSeedhubMagnetTask(taskId)
+  } catch (error) {
+    console.error('Failed to fetch seedhub magnet:', error)
+    ElMessage.error(error.response?.data?.detail || error.message || 'SeedHub 磁链获取失败')
+    seedhubMagnetLoading.value = false
+    stopSeedhubTaskPolling()
+  }
+}
+
+const stopSeedhubTaskPolling = () => {
+  if (seedhubPollTimer) {
+    clearTimeout(seedhubPollTimer)
+    seedhubPollTimer = null
+  }
+}
+
+const resetSeedhubTaskState = async () => {
+  stopSeedhubTaskPolling()
+  const taskId = seedhubMagnetTaskId.value
+  seedhubMagnetTaskId.value = ''
+  if (!taskId) return
+  try {
+    await searchApi.cancelSeedhubMagnetTask(taskId)
+  } catch {
+    // ignore cleanup failures
+  }
+}
+
+const pollSeedhubMagnetTask = async (taskId) => {
+  try {
+    const { data } = await searchApi.getSeedhubMagnetTask(taskId)
+    const seedhubList = Array.isArray(data?.items) ? data.items : []
+    magnetResources.value = mergeMagnetResources(magnetResources.value, seedhubList)
+
+    const status = String(data?.status || '')
+    if (status === 'queued' || status === 'running') {
+      seedhubPollTimer = setTimeout(() => {
+        seedhubPollTimer = null
+        pollSeedhubMagnetTask(taskId)
+      }, 1200)
+      return
+    }
+
+    seedhubMagnetLoading.value = false
+    if ((status === 'success' || status === 'partial_success') && seedhubList.length === 0) {
+      ElMessage.info('SeedHub 暂未找到可用磁链')
+    }
+    if (status === 'failed') {
+      ElMessage.error(data?.error || 'SeedHub 检索失败')
+    }
+  } catch (error) {
+    stopSeedhubTaskPolling()
+    seedhubMagnetLoading.value = false
+    ElMessage.error(error.response?.data?.detail || error.message || 'SeedHub 磁链获取失败')
+  } finally {
+    if (seedhubMagnetLoading.value && !seedhubPollTimer) {
+      seedhubMagnetLoading.value = false
+    }
   }
 }
 
@@ -578,11 +734,27 @@ watch(activeTab, (tab) => {
   }
 })
 
+watch(magnetSourceTab, (tab) => {
+  if (tab === 'seedhub' && seedhubMagnetResources.value.length === 0 && !seedhubMagnetLoading.value) {
+    handleFetchSeedhubMagnet()
+  }
+})
+
+watch(pan115SourceTab, (tab) => {
+  if (tab === 'pansou' && pansouPan115Resources.value.length === 0 && !pansouLoading.value && !pansouTried.value) {
+    handleFetchPansouPan115()
+  }
+})
+
 watch(() => route.params.id, () => {
+  resetSeedhubTaskState()
   pan115SourceTab.value = 'nullbr'
+  magnetSourceTab.value = 'nullbr'
   pan115Resources.value = []
   pansouTried.value = false
   pansouLoading.value = false
+  seedhubMagnetTried.value = false
+  seedhubMagnetLoading.value = false
   magnetResources.value = []
   ed2kResources.value = []
   fetchMovie()
@@ -594,6 +766,10 @@ onMounted(() => {
   fetchMovie()
   fetchPan115()
   checkSubscribed()
+})
+
+onBeforeUnmount(() => {
+  resetSeedhubTaskState()
 })
 </script>
 
@@ -810,6 +986,7 @@ onMounted(() => {
   .text-muted {
     color: var(--ms-text-muted);
   }
+
 }
 
 @keyframes fadeIn {

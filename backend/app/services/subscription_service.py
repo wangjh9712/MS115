@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.models import (
     DownloadRecord,
     ExecutionStatus,
+    MediaStatus,
     MediaType,
     Subscription,
     SubscriptionExecutionLog,
@@ -55,10 +57,26 @@ class SubscriptionService:
         }
 
         subs_result = await db.execute(
-            select(Subscription)
-            .order_by(Subscription.id.asc())
+            select(
+                Subscription.id,
+                Subscription.tmdb_id,
+                Subscription.title,
+                Subscription.media_type,
+                Subscription.year,
+                Subscription.auto_download,
+            ).order_by(Subscription.id.asc())
         )
-        subscriptions = subs_result.scalars().all()
+        subscriptions = [
+            SubscriptionSnapshot(
+                id=int(row.id),
+                tmdb_id=int(row.tmdb_id) if row.tmdb_id is not None else None,
+                title=str(row.title or ""),
+                media_type=row.media_type,
+                year=str(row.year) if row.year is not None else None,
+                auto_download=bool(row.auto_download),
+            )
+            for row in subs_result.all()
+        ]
         result["checked_count"] = len(subscriptions)
         await self._create_step_log(
             db,
@@ -127,6 +145,7 @@ class SubscriptionService:
                 )
                 store_stats = await self._store_new_resources(db, sub_id, resources)
                 created_records = store_stats["created_records"]
+                duplicate_urls = store_stats["duplicate_urls"]
                 result["new_resource_count"] += len(created_records)
                 result["resource_checked_count"] += int(store_stats["checked_count"])
                 result["resource_duplicate_count"] += int(store_stats["duplicate_count"])
@@ -158,6 +177,13 @@ class SubscriptionService:
                     retry_records = []
                     if sub.auto_download:
                         retry_records = await self._load_retryable_records(db, sub_id)
+                    if force_auto_download and duplicate_urls:
+                        duplicate_retry_records = await self._load_force_retry_records(
+                            db,
+                            sub_id,
+                            duplicate_urls,
+                        )
+                        retry_records = self._merge_records(retry_records, duplicate_retry_records)
                     retry_records = self._exclude_new_records(retry_records, created_records)
 
                     if created_records:
@@ -403,7 +429,7 @@ class SubscriptionService:
     async def _fetch_resources(
         self,
         channel: str,
-        sub: Subscription,
+        sub: "SubscriptionSnapshot",
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         traces: list[dict[str, Any]] = []
         if sub.tmdb_id is None:
@@ -507,11 +533,13 @@ class SubscriptionService:
         subscription_id: int,
         resources: list[dict[str, Any]],
     ) -> dict[str, Any]:
+        from app.models.models import MediaStatus
         if not resources:
             return {
                 "created_records": [],
                 "checked_count": 0,
                 "duplicate_count": 0,
+                "duplicate_urls": [],
                 "invalid_count": 0,
             }
 
@@ -522,6 +550,7 @@ class SubscriptionService:
         existing_urls = {str(row[0]) for row in existing_result.all() if row and row[0]}
 
         created_records: list[DownloadRecord] = []
+        duplicate_urls: set[str] = set()
         duplicate_count = 0
         invalid_count = 0
         for item in resources:
@@ -531,6 +560,7 @@ class SubscriptionService:
                 continue
             if resource_url in existing_urls:
                 duplicate_count += 1
+                duplicate_urls.add(resource_url)
                 continue
 
             record = DownloadRecord(
@@ -548,10 +578,12 @@ class SubscriptionService:
             "created_records": created_records,
             "checked_count": len(resources),
             "duplicate_count": duplicate_count,
+            "duplicate_urls": list(duplicate_urls),
             "invalid_count": invalid_count,
         }
 
     async def _load_retryable_records(self, db: AsyncSession, subscription_id: int) -> list[DownloadRecord]:
+        from app.models.models import MediaStatus
         with db.no_autoflush:
             failed_result = await db.execute(
                 select(DownloadRecord).where(
@@ -584,6 +616,37 @@ class SubscriptionService:
 
         return retryable
 
+    async def _load_force_retry_records(
+        self,
+        db: AsyncSession,
+        subscription_id: int,
+        duplicate_urls: list[str],
+    ) -> list[DownloadRecord]:
+        from app.models.models import MediaStatus
+
+        url_values = [str(item or "").strip() for item in duplicate_urls if str(item or "").strip()]
+        if not url_values:
+            return []
+
+        with db.no_autoflush:
+            rows_result = await db.execute(
+                select(DownloadRecord).where(
+                    DownloadRecord.subscription_id == subscription_id,
+                    DownloadRecord.resource_url.in_(url_values),
+                    DownloadRecord.status.in_((MediaStatus.FAILED, MediaStatus.PENDING)),
+                ).order_by(DownloadRecord.created_at.desc())
+            )
+
+        selected: list[DownloadRecord] = []
+        seen_urls: set[str] = set()
+        for row in rows_result.scalars().all():
+            key = str(row.resource_url or "").strip()
+            if not key or key in seen_urls:
+                continue
+            seen_urls.add(key)
+            selected.append(row)
+        return selected
+
     @staticmethod
     def _exclude_new_records(retry_records: list[DownloadRecord], new_records: list[DownloadRecord]) -> list[DownloadRecord]:
         new_keys: set[str] = set()
@@ -614,10 +677,11 @@ class SubscriptionService:
         db: AsyncSession,
         run_id: str,
         channel: str,
-        sub: Subscription,
+        sub: "SubscriptionSnapshot",
         records: list[DownloadRecord],
         source: str,
     ) -> dict[str, Any]:
+        from app.models.models import MediaStatus
         runtime_cookie = runtime_settings_service.get_pan115_cookie()
         pan_service = Pan115Service(runtime_cookie)
         # 订阅自动转存应使用“默认转存文件夹”，而不是离线下载目录。
@@ -773,8 +837,18 @@ class SubscriptionService:
         return []
 
     @staticmethod
+    def _normalize_share_url(url: str) -> str:
+        url = url.strip()
+        if not url:
+            return ""
+        if "#" in url:
+            url = url.split("#")[0]
+        url = url.replace("https://115cdn.com/", "https://115.com/")
+        return url
+
+    @staticmethod
     def _extract_resource_url(item: dict[str, Any]) -> str:
-        return str(
+        raw_url = str(
             item.get("pan115_share_link")
             or item.get("shareLink")
             or item.get("share_link")
@@ -782,6 +856,7 @@ class SubscriptionService:
             or item.get("url")
             or ""
         ).strip()
+        return SubscriptionService._normalize_share_url(raw_url)
 
     @staticmethod
     def _extract_resource_name(item: dict[str, Any]) -> str:
@@ -789,13 +864,13 @@ class SubscriptionService:
         return name or "未命名资源"
 
     @staticmethod
-    def _build_pansou_keyword(sub: Subscription) -> str:
+    def _build_pansou_keyword(sub: "SubscriptionSnapshot") -> str:
         if sub.year:
             return f"{sub.title} {sub.year}".strip()
         return sub.title
 
     @staticmethod
-    def _build_target_folder_name(sub: Subscription) -> str:
+    def _build_target_folder_name(sub: "SubscriptionSnapshot") -> str:
         base_name = str(sub.title or "订阅资源").strip() or "订阅资源"
         if sub.year:
             base_name = f"{base_name} ({sub.year})"
@@ -895,3 +970,13 @@ class SubscriptionService:
 
 
 subscription_service = SubscriptionService()
+
+
+@dataclass(slots=True)
+class SubscriptionSnapshot:
+    id: int
+    tmdb_id: int | None
+    title: str
+    media_type: MediaType
+    year: str | None
+    auto_download: bool

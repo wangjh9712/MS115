@@ -18,6 +18,8 @@ from app.services.douban_explore_service import (
 from app.services.nullbr_service import nullbr_service
 from app.services.pansou_service import pansou_service
 from app.services.runtime_settings_service import runtime_settings_service
+from app.services.seedhub_service import seedhub_service
+from app.services.seedhub_task_service import seedhub_task_service
 from app.services.tmdb_service import tmdb_service
 from app.services.tmdb_explore_service import TMDB_SECTION_SOURCES, fetch_tmdb_section
 
@@ -326,21 +328,62 @@ def _extract_year_from_date_like(value: Any) -> str:
     return ""
 
 
-def _build_pansou_keyword_from_media(payload: dict, media_type: str) -> str:
-    if not isinstance(payload, dict):
+def _normalize_keyword_text(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
         return ""
+    return re.sub(r"\s+", " ", text)
+
+
+def _build_pansou_keyword_candidates(payload: dict, media_type: str, tmdb_id: int) -> list[str]:
+    candidates: list[str] = []
+    seen: set[str] = set()
 
     if media_type == "tv":
-        title = str(payload.get("title") or payload.get("name") or "").strip()
+        title = _normalize_keyword_text(payload.get("name") or payload.get("title"))
+        original_title = _normalize_keyword_text(payload.get("original_name") or payload.get("original_title"))
         date_like = payload.get("first_air_date") or payload.get("release_date") or payload.get("release")
     else:
-        title = str(payload.get("title") or payload.get("name") or "").strip()
+        title = _normalize_keyword_text(payload.get("title") or payload.get("name"))
+        original_title = _normalize_keyword_text(payload.get("original_title") or payload.get("original_name"))
         date_like = payload.get("release_date") or payload.get("release")
 
     year = _extract_year_from_date_like(date_like)
+
+    def add_keyword(keyword: str) -> None:
+        normalized = _normalize_keyword_text(keyword)
+        if not normalized:
+            return
+        fingerprint = normalized.casefold()
+        if fingerprint in seen:
+            return
+        seen.add(fingerprint)
+        candidates.append(normalized)
+
+    # Prefer localized title with year, then fallback to localized title.
     if title and year:
-        return f"{title} {year}"
-    return title
+        add_keyword(f"{title} {year}")
+    add_keyword(title)
+
+    # Then try original title with and without year.
+    if original_title and year:
+        add_keyword(f"{original_title} {year}")
+    add_keyword(original_title)
+
+    # Last fallback keeps behavior deterministic when TMDB title is missing.
+    add_keyword(f"TMDB {tmdb_id}")
+    return candidates
+
+
+def _build_pansou_keyword_from_media(payload: dict, media_type: str) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    # Keep compatibility for callers that only need a single preferred keyword.
+    candidates = _build_pansou_keyword_candidates(payload, media_type, tmdb_id=0)
+    for keyword in candidates:
+        if keyword != "TMDB 0":
+            return keyword
+    return ""
 
 
 def _normalize_pansou_pan115_list(payload: Any) -> list[dict]:
@@ -1007,13 +1050,92 @@ async def _search_pansou_pan115_resources(tmdb_id: int, media_type: str) -> tupl
     pansou_service.set_base_url(runtime_settings_service.get_pansou_base_url())
     media_payload = await _load_media_payload(tmdb_id, media_type)
 
-    pansou_keyword = _build_pansou_keyword_from_media(media_payload, media_type)
-    if not pansou_keyword:
-        pansou_keyword = f"TMDB {tmdb_id}"
+    keyword_candidates = _build_pansou_keyword_candidates(media_payload, media_type, tmdb_id)
+    selected_keyword = keyword_candidates[0] if keyword_candidates else f"TMDB {tmdb_id}"
 
-    pansou_payload = await pansou_service.search_115(pansou_keyword, res="results")
-    pansou_list = _normalize_pansou_pan115_list(pansou_payload)
-    return pansou_keyword, pansou_list
+    for keyword in keyword_candidates:
+        pansou_payload = await pansou_service.search_115(keyword, res="results")
+        pansou_list = _normalize_pansou_pan115_list(pansou_payload)
+        if pansou_list:
+            return keyword, pansou_list
+
+    return selected_keyword, []
+
+
+async def _search_seedhub_magnet_resources(tmdb_id: int, media_type: str) -> tuple[str, list[dict]]:
+    media_payload = await _load_media_payload(tmdb_id, media_type)
+    keyword_candidates = _build_pansou_keyword_candidates(media_payload, media_type, tmdb_id)
+    selected_keyword = keyword_candidates[0] if keyword_candidates else f"TMDB {tmdb_id}"
+
+    for keyword in keyword_candidates:
+        items = await seedhub_service.search_magnets_by_keyword(keyword, limit=40)
+        if items:
+            return keyword, items
+    return selected_keyword, []
+
+
+def _serialize_seedhub_task(task: dict[str, Any]) -> dict[str, Any]:
+    items = list(task.get("items") or [])
+    return {
+        "task_id": str(task.get("task_id") or ""),
+        "status": str(task.get("status") or "queued"),
+        "message": str(task.get("message") or ""),
+        "media_type": str(task.get("media_type") or ""),
+        "tmdb_id": task.get("tmdb_id"),
+        "keyword": str(task.get("keyword") or ""),
+        "progress": {
+            "total_candidates": int(task.get("total_candidates") or 0),
+            "resolved_count": int(task.get("resolved_count") or 0),
+            "success_count": int(task.get("success_count") or 0),
+            "failed_count": int(task.get("failed_count") or 0),
+        },
+        "items": items,
+        "error": task.get("error"),
+        "started_at": task.get("started_at"),
+        "updated_at": task.get("updated_at"),
+        "finished_at": task.get("finished_at"),
+        "already_running": bool(task.get("already_running")),
+    }
+
+
+@router.post("/{media_type}/{tmdb_id}/magnet/seedhub/tasks")
+async def create_seedhub_magnet_task(
+    media_type: str,
+    tmdb_id: int,
+    limit: int = Query(40, ge=1, le=80, description="结果上限"),
+    force_refresh: bool = Query(False, description="是否绕过缓存"),
+):
+    normalized_media_type = str(media_type or "").strip().lower()
+    if normalized_media_type not in {"movie", "tv"}:
+        raise HTTPException(status_code=400, detail="media_type must be movie or tv")
+
+    media_payload = await _load_media_payload(tmdb_id, normalized_media_type)
+    keyword_candidates = _build_pansou_keyword_candidates(media_payload, normalized_media_type, tmdb_id)
+
+    task = await seedhub_task_service.start(
+        media_type=normalized_media_type,
+        tmdb_id=tmdb_id,
+        keyword_candidates=keyword_candidates,
+        limit=limit,
+        force_refresh=force_refresh,
+    )
+    return _serialize_seedhub_task(task)
+
+
+@router.get("/magnet/seedhub/tasks/{task_id}")
+async def get_seedhub_magnet_task(task_id: str):
+    task = await seedhub_task_service.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="task not found")
+    return _serialize_seedhub_task(task)
+
+
+@router.delete("/magnet/seedhub/tasks/{task_id}")
+async def cancel_seedhub_magnet_task(task_id: str):
+    task = await seedhub_task_service.cancel(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="task not found")
+    return _serialize_seedhub_task(task)
 
 
 @router.get("/movie/{tmdb_id}/115")
@@ -1087,9 +1209,45 @@ async def get_movie_pan115_with_pansou(tmdb_id: int, page: int = Query(1, ge=1))
 
 
 @router.get("/movie/{tmdb_id}/magnet")
-def get_movie_magnet(tmdb_id: int):
+async def get_movie_magnet(
+    tmdb_id: int,
+    source: str = Query("nullbr", pattern="^(nullbr|seedhub)$", description="Magnet source"),
+):
+    if source == "seedhub":
+        keyword, items = await _search_seedhub_magnet_resources(tmdb_id, "movie")
+        return {
+            "id": tmdb_id,
+            "media_type": "movie",
+            "list": items,
+            "attempts": [{"service": "seedhub", "status": "ok", "count": len(items), "keyword": keyword}],
+            "keyword": keyword,
+            "search_service": "seedhub",
+        }
+
     fallback = _resource_fallback_payload(tmdb_id=tmdb_id, media_type="movie", error="")
     return _call_nullbr_resource(lambda: nullbr_service.get_movie_magnet(tmdb_id), fallback)
+
+
+@router.get("/movie/{tmdb_id}/magnet/seedhub")
+async def get_movie_magnet_seedhub(tmdb_id: int):
+    attempts: list[dict[str, Any]] = []
+    keyword = ""
+    items: list[dict] = []
+
+    try:
+        keyword, items = await _search_seedhub_magnet_resources(tmdb_id, "movie")
+        attempts.append({"service": "seedhub", "status": "ok", "count": len(items), "keyword": keyword})
+    except Exception as exc:
+        attempts.append({"service": "seedhub", "status": "error", "error": str(exc)})
+
+    return {
+        "id": tmdb_id,
+        "media_type": "movie",
+        "list": items,
+        "attempts": attempts,
+        "keyword": keyword,
+        "search_service": "seedhub",
+    }
 
 
 @router.get("/movie/{tmdb_id}/ed2k")
@@ -1282,11 +1440,23 @@ def get_tv_episode_video(tmdb_id: int, season_number: int, episode_number: int):
 
 
 @router.get("/tv/{tmdb_id}/magnet")
-def get_tv_magnet(
+async def get_tv_magnet(
     tmdb_id: int,
     season: Optional[int] = Query(None, description="Season"),
     episode: Optional[int] = Query(None, description="Episode"),
+    source: str = Query("nullbr", pattern="^(nullbr|seedhub)$", description="Magnet source"),
 ):
+    if source == "seedhub":
+        keyword, items = await _search_seedhub_magnet_resources(tmdb_id, "tv")
+        return {
+            "id": tmdb_id,
+            "media_type": "tv",
+            "list": items,
+            "attempts": [{"service": "seedhub", "status": "ok", "count": len(items), "keyword": keyword}],
+            "keyword": keyword,
+            "search_service": "seedhub",
+        }
+
     fallback = _resource_fallback_payload(
         tmdb_id=tmdb_id,
         media_type="tv",
@@ -1295,6 +1465,28 @@ def get_tv_magnet(
         error="",
     )
     return _call_nullbr_resource(lambda: nullbr_service.get_tv_magnet(tmdb_id, season, episode), fallback)
+
+
+@router.get("/tv/{tmdb_id}/magnet/seedhub")
+async def get_tv_magnet_seedhub(tmdb_id: int):
+    attempts: list[dict[str, Any]] = []
+    keyword = ""
+    items: list[dict] = []
+
+    try:
+        keyword, items = await _search_seedhub_magnet_resources(tmdb_id, "tv")
+        attempts.append({"service": "seedhub", "status": "ok", "count": len(items), "keyword": keyword})
+    except Exception as exc:
+        attempts.append({"service": "seedhub", "status": "error", "error": str(exc)})
+
+    return {
+        "id": tmdb_id,
+        "media_type": "tv",
+        "list": items,
+        "attempts": attempts,
+        "keyword": keyword,
+        "search_service": "seedhub",
+    }
 
 
 @router.get("/tv/{tmdb_id}/ed2k")

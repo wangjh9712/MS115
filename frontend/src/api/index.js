@@ -58,6 +58,9 @@ export const searchApi = {
   getMoviePan115: (tmdbId, page = 1) => api.get(`/search/movie/${tmdbId}/115`, { params: { page } }),
   getMoviePan115Pansou: (tmdbId, page = 1) => api.get(`/search/movie/${tmdbId}/115/pansou`, { params: { page } }),
   getMovieMagnet: (tmdbId) => api.get(`/search/movie/${tmdbId}/magnet`),
+  getMovieMagnetSeedhub: (tmdbId) => api.get(`/search/movie/${tmdbId}/magnet`, { params: { source: 'seedhub' } }),
+  createMovieSeedhubMagnetTask: (tmdbId, limit = 40, forceRefresh = false) =>
+    api.post(`/search/movie/${tmdbId}/magnet/seedhub/tasks`, null, { params: { limit, force_refresh: forceRefresh } }),
   getMovieEd2k: (tmdbId) => api.get(`/search/movie/${tmdbId}/ed2k`),
   getMovieVideo: (tmdbId) => api.get(`/search/movie/${tmdbId}/video`),
 
@@ -74,6 +77,11 @@ export const searchApi = {
   getTvEpisodeVideo: (tmdbId, seasonNumber, episodeNumber) => api.get(`/search/tv/${tmdbId}/season/${seasonNumber}/episode/${episodeNumber}/video`),
 
   getTvMagnet: (tmdbId, season, episode) => api.get(`/search/tv/${tmdbId}/magnet`, { params: { season, episode } }),
+  getTvMagnetSeedhub: (tmdbId) => api.get(`/search/tv/${tmdbId}/magnet`, { params: { source: 'seedhub' } }),
+  createTvSeedhubMagnetTask: (tmdbId, limit = 40, forceRefresh = false) =>
+    api.post(`/search/tv/${tmdbId}/magnet/seedhub/tasks`, null, { params: { limit, force_refresh: forceRefresh } }),
+  getSeedhubMagnetTask: (taskId) => api.get(`/search/magnet/seedhub/tasks/${taskId}`),
+  cancelSeedhubMagnetTask: (taskId) => api.delete(`/search/magnet/seedhub/tasks/${taskId}`),
   getTvEd2k: (tmdbId, season, episode) => api.get(`/search/tv/${tmdbId}/ed2k`, { params: { season, episode } }),
   getTvVideo: (tmdbId, season, episode) => api.get(`/search/tv/${tmdbId}/video`, { params: { season, episode } }),
 

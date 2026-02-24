@@ -55,6 +55,12 @@ def classify_115_error(error_msg: str) -> str:
 
 # ==================== 请求模型 ====================
 
+def _get_transfer_default_folder_id() -> str:
+    folder = runtime_settings_service.get_pan115_default_folder()
+    folder_id = str(folder.get("folder_id") or "0").strip()
+    return folder_id or "0"
+
+
 class OfflineTaskCreate(BaseModel):
     """离线下载任务创建请求"""
     url: str
@@ -607,10 +613,11 @@ async def save_share_file(request: SaveShareRequest):
     """
     service = get_service()
     try:
+        target_pid = _get_transfer_default_folder_id()
         result = await service.save_share_file(
             request.share_code,
             request.file_id,
-            request.pid,
+            target_pid,
             request.receive_code
         )
         return result
@@ -627,10 +634,11 @@ async def save_share_files(request: SaveShareFilesRequest):
     """
     service = get_service()
     try:
+        target_pid = _get_transfer_default_folder_id()
         result = await service.save_share_files(
             request.share_code,
             request.file_ids,
-            request.pid,
+            target_pid,
             request.receive_code
         )
         return result
@@ -651,7 +659,8 @@ async def save_share_all(
     """
     service = get_service()
     try:
-        result = await service.save_share_all(share_code, pid, receive_code)
+        target_pid = _get_transfer_default_folder_id()
+        result = await service.save_share_all(share_code, target_pid, receive_code)
         return result
     except Exception as e:
         handle_115_error(e)
@@ -666,11 +675,12 @@ async def save_share_to_folder(request: SaveShareToFolderRequest):
     如果提供了 tmdb_id，则会使用 Emby 差集比对进行追更转存
     """
     service = get_service()
+    transfer_parent_id = _get_transfer_default_folder_id()
     last_error: Exception | None = None
     for attempt in range(4):
         try:
             # 1. 首先确保目标文件夹存在
-            target_folder_id = await service.get_or_create_folder(request.parent_id, request.folder_name)
+            target_folder_id = await service.get_or_create_folder(transfer_parent_id, request.folder_name)
 
             # 2. 如果提供了 tmdb_id，说明这是一个剧集，进行查漏补缺式的转存
             if request.tmdb_id:
@@ -686,7 +696,7 @@ async def save_share_to_folder(request: SaveShareToFolderRequest):
             result = await service.save_share_to_folder(
                 request.share_url,
                 request.folder_name,
-                request.parent_id,
+                transfer_parent_id,
                 request.receive_code
             )
             return result
@@ -766,6 +776,7 @@ async def save_share_files_to_folder(request: SaveShareFilesToFolderRequest):
     将用户勾选的部分文件转存到指定名称的文件夹中
     """
     service = get_service()
+    transfer_parent_id = _get_transfer_default_folder_id()
     last_error: Exception | None = None
     for attempt in range(4):
         try:
@@ -773,7 +784,7 @@ async def save_share_files_to_folder(request: SaveShareFilesToFolderRequest):
                 request.share_url,
                 request.file_ids,
                 request.folder_name,
-                request.parent_id,
+                transfer_parent_id,
                 request.receive_code
             )
             return result
