@@ -3,18 +3,19 @@
     <div class="page-header">
       <h2>订阅详细日志</h2>
       <div class="filters">
-        <el-select v-model="filters.channel" clearable placeholder="渠道" style="width: 140px">
+        <el-select v-model="filters.channel" clearable placeholder="渠道" class="filter-item filter-item-channel">
           <el-option label="Nullbr" value="nullbr" />
           <el-option label="Pansou" value="pansou" />
         </el-select>
-        <el-input v-model.trim="filters.runId" placeholder="Run ID" clearable style="width: 240px" />
+        <el-input v-model.trim="filters.runId" placeholder="Run ID" clearable class="filter-item filter-item-runid" />
         <el-input-number v-model="filters.limit" :min="20" :max="1000" :step="20" />
         <el-button type="primary" :loading="loading" @click="fetchStepLogs">刷新</el-button>
       </div>
     </div>
 
     <el-card>
-      <el-table :data="logs" v-loading="loading" size="small" stripe>
+      <div class="table-wrap">
+        <el-table :data="logs" v-loading="loading" size="small" stripe>
         <el-table-column type="expand" width="42">
           <template #default="{ row }">
             <div class="payload-panel">
@@ -43,7 +44,8 @@
           </template>
         </el-table-column>
         <el-table-column prop="message" label="说明" min-width="320" show-overflow-tooltip />
-      </el-table>
+        </el-table>
+      </div>
     </el-card>
   </div>
 </template>
@@ -148,8 +150,25 @@ onMounted(() => {
 
     .filters {
       display: flex;
+      flex-wrap: wrap;
       gap: 10px;
       align-items: center;
+
+      .filter-item-channel {
+        width: 140px;
+      }
+
+      .filter-item-runid {
+        width: 240px;
+      }
+    }
+  }
+
+  .table-wrap {
+    overflow-x: auto;
+
+    .el-table {
+      min-width: 1120px;
     }
   }
 
@@ -192,6 +211,30 @@ onMounted(() => {
     .payload-empty {
       color: var(--ms-text-muted);
       font-size: 12px;
+    }
+  }
+}
+
+@media (max-width: 1024px) {
+  .subscription-logs-page {
+    .page-header {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: 12px;
+
+      .filters {
+        width: 100%;
+
+        .filter-item-channel,
+        .filter-item-runid {
+          width: 100%;
+        }
+
+        :deep(.el-input-number),
+        :deep(.el-button) {
+          width: 100%;
+        }
+      }
     }
   }
 }

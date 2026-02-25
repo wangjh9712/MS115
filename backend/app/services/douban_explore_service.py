@@ -109,6 +109,12 @@ _douban_user_agents = [
     ),
 ]
 
+_season_suffix_patterns = [
+    re.compile(r"\s*第[一二三四五六七八九十百千零两0-9]+季\s*$", re.IGNORECASE),
+    re.compile(r"\s*season\s*[0-9]{1,2}\s*$", re.IGNORECASE),
+    re.compile(r"\s*s[0-9]{1,2}\s*$", re.IGNORECASE),
+]
+
 
 def _douban_sign(path: str, ts: str, method: str = "GET") -> str:
     raw_sign = "&".join([method.upper(), quote(path, safe=""), ts])
@@ -132,20 +138,49 @@ def _build_douban_api_headers(now: float) -> dict[str, str]:
 
 
 def _normalize_poster_url(item: dict[str, Any]) -> str:
+    def normalize_url(value: Any) -> str:
+        if not isinstance(value, str):
+            return ""
+        url = value.strip()
+        if not url:
+            return ""
+        if url.startswith("//"):
+            return f"https:{url}"
+        if url.startswith("http://"):
+            return url.replace("http://", "https://", 1)
+        return url
+
     cover = item.get("cover")
     if isinstance(cover, dict):
-        cover_url = cover.get("url")
-        if isinstance(cover_url, str):
+        cover_url = normalize_url(cover.get("url"))
+        if cover_url:
             return cover_url
+    elif isinstance(cover, str):
+        cover_url = normalize_url(cover)
+        if cover_url:
+            return cover_url
+
+    cover_url = normalize_url(item.get("cover_url"))
+    if cover_url:
+        return cover_url
 
     pic = item.get("pic")
     if isinstance(pic, dict):
-        large = pic.get("large")
-        normal = pic.get("normal")
-        if isinstance(large, str) and large:
+        large = normalize_url(pic.get("large"))
+        normal = normalize_url(pic.get("normal"))
+        url = normalize_url(pic.get("url"))
+        if large:
             return large
-        if isinstance(normal, str) and normal:
+        if normal:
             return normal
+        if url:
+            return url
+
+    avatar = item.get("avatar")
+    if isinstance(avatar, dict):
+        avatar_url = normalize_url(avatar.get("large") or avatar.get("normal") or avatar.get("url"))
+        if avatar_url:
+            return avatar_url
 
     return ""
 
@@ -169,7 +204,24 @@ def _extract_intro(item: dict[str, Any]) -> str:
 def _extract_year(item: dict[str, Any]) -> Optional[str]:
     year = item.get("year")
     if isinstance(year, str) and year:
-        return year
+        match = re.search(r"(?:19|20)\d{2}", year)
+        if match:
+            return match.group(0)
+
+    # Frodo list payload often omits the dedicated year field.
+    # Fall back to subtitle text like: "2001 / 日本 / ...".
+    card_subtitle = item.get("card_subtitle")
+    if isinstance(card_subtitle, str) and card_subtitle:
+        match = re.search(r"(?:19|20)\d{2}", card_subtitle)
+        if match:
+            return match.group(0)
+
+    description = item.get("description")
+    if isinstance(description, str) and description:
+        match = re.search(r"(?:19|20)\d{2}", description)
+        if match:
+            return match.group(0)
+
     return None
 
 
@@ -192,6 +244,14 @@ def _extract_rating(item: dict[str, Any]) -> Optional[float]:
 def _extract_douban_subject_id(item: dict[str, Any]) -> str:
     value = item.get("id")
     return str(value) if value is not None else ""
+
+
+def _build_douban_web_subject_url(douban_id: str, media_type: str) -> str:
+    normalized_id = str(douban_id or "").strip()
+    if not normalized_id:
+        return ""
+    normalized_type = "tv" if media_type == "tv" else "movie"
+    return f"https://movie.douban.com/subject/{quote(normalized_id, safe='')}/"
 
 
 def _build_tmdb_cache_key(title: str, year: Optional[str], media_type: str) -> str:
@@ -289,6 +349,39 @@ def _extract_candidate_title(candidate: dict[str, Any]) -> str:
     return ""
 
 
+def _strip_season_suffix(title: str) -> str:
+    stripped = title.strip()
+    if not stripped:
+        return ""
+
+    for pattern in _season_suffix_patterns:
+        stripped = pattern.sub("", stripped).strip()
+    return stripped
+
+
+def _build_title_variants(title: str) -> list[str]:
+    normalized = str(title or "").strip()
+    if not normalized:
+        return []
+
+    variants: list[str] = []
+    seen: set[str] = set()
+
+    def add_variant(value: str) -> None:
+        text = str(value or "").strip()
+        if not text:
+            return
+        key = text.casefold()
+        if key in seen:
+            return
+        seen.add(key)
+        variants.append(text)
+
+    add_variant(normalized)
+    add_variant(_strip_season_suffix(normalized))
+    return variants
+
+
 def _title_similarity(source_title: str, candidate_title: str) -> float:
     left = _normalize_compare_text(source_title)
     right = _normalize_compare_text(candidate_title)
@@ -301,7 +394,7 @@ def _title_similarity(source_title: str, candidate_title: str) -> float:
 
 def _score_candidate(
     candidate: dict[str, Any],
-    title: str,
+    title_variants: list[str],
     media_type: str,
     year: Optional[str],
 ) -> tuple[float, dict[str, Any]]:
@@ -309,14 +402,21 @@ def _score_candidate(
     candidate_type = str(candidate.get("media_type") or "").strip().lower()
     candidate_title = _extract_candidate_title(candidate)
     candidate_year = _extract_result_year(candidate)
-    similarity = _title_similarity(title, candidate_title)
+    best_similarity = 0.0
+    best_source_title = ""
+    for source_title in title_variants:
+        similarity = _title_similarity(source_title, candidate_title)
+        if similarity > best_similarity:
+            best_similarity = similarity
+            best_source_title = source_title
 
     meta = {
         "tmdb_id": tmdb_id,
         "media_type": candidate_type,
         "title": candidate_title,
         "year": candidate_year,
-        "title_similarity": round(similarity, 4),
+        "title_similarity": round(best_similarity, 4),
+        "matched_source_title": best_source_title,
     }
 
     if not tmdb_id:
@@ -329,7 +429,7 @@ def _score_candidate(
         meta["reject_reason"] = "media_type_mismatch"
         return 0.0, meta
 
-    if similarity < 0.88:
+    if best_similarity < 0.88:
         meta["accepted"] = False
         meta["reject_reason"] = "low_title_similarity"
         return 0.0, meta
@@ -349,7 +449,7 @@ def _score_candidate(
         elif delta == 1:
             year_bonus = 0.1
 
-    score = min(1.0, similarity * 0.8 + year_bonus)
+    score = min(1.0, best_similarity * 0.8 + year_bonus)
     meta["accepted"] = True
     meta["score"] = round(score, 4)
     return score, meta
@@ -361,11 +461,20 @@ def _pick_best_tmdb_match(
     year: Optional[str],
     items: list[dict[str, Any]],
 ) -> tuple[Optional[dict[str, Any]], list[dict[str, Any]]]:
+    title_variants = _build_title_variants(title)
+    if not title_variants:
+        return None, []
+
     scored: list[dict[str, Any]] = []
     for row in items:
         if not isinstance(row, dict):
             continue
-        score, meta = _score_candidate(row, title=title, media_type=media_type, year=year)
+        score, meta = _score_candidate(
+            row,
+            title_variants=title_variants,
+            media_type=media_type,
+            year=year,
+        )
         meta["score"] = round(score, 4)
         scored.append(meta)
 
@@ -376,7 +485,8 @@ def _pick_best_tmdb_match(
 
     best = accepted[0]
     best_score = float(best.get("score") or 0.0)
-    if best_score < 0.92:
+    min_score = 0.92 if year else 0.8
+    if best_score < min_score:
         return None, scored[:5]
 
     if len(accepted) > 1:
@@ -388,24 +498,30 @@ def _pick_best_tmdb_match(
 
 
 def _resolve_tmdb_id_by_nullbr(title: str, media_type: str, year: Optional[str]) -> Optional[int]:
-    if not title:
+    title_variants = _build_title_variants(title)
+    if not title_variants:
         return None
 
-    try:
-        result = nullbr_service.search(title, 1)
-    except Exception:
-        return None
+    rows: list[dict[str, Any]] = []
+    for query in title_variants:
+        try:
+            result = nullbr_service.search(query, 1)
+        except Exception:
+            continue
+        items = result.get("items") or result.get("results") or []
+        if not isinstance(items, list):
+            continue
+        rows.extend([row for row in items if isinstance(row, dict)])
 
-    items = result.get("items") or result.get("results") or []
-    if not isinstance(items, list):
-        items = []
+    if not rows:
+        return None
 
     expected_type = "movie" if media_type == "movie" else "tv"
     best, _ = _pick_best_tmdb_match(
         title=title,
         media_type=expected_type,
         year=year,
-        items=[row for row in items if isinstance(row, dict)],
+        items=rows,
     )
     if not best:
         return None
@@ -414,29 +530,60 @@ def _resolve_tmdb_id_by_nullbr(title: str, media_type: str, year: Optional[str])
 
 
 async def _resolve_tmdb_id_by_tmdb(title: str, media_type: str, year: Optional[str]) -> Optional[int]:
-    if not title:
-        return None
+    tmdb_id, _ = await _resolve_tmdb_id_by_tmdb_with_status(title, media_type, year)
+    return tmdb_id
 
-    try:
-        result = await tmdb_service.search_multi(title, 1)
-    except Exception:
-        return None
 
-    items = result.get("items") or result.get("results") or []
-    if not isinstance(items, list):
-        items = []
+async def _resolve_tmdb_id_by_tmdb_with_status(
+    title: str,
+    media_type: str,
+    year: Optional[str],
+) -> tuple[Optional[int], bool]:
+    title_variants = _build_title_variants(title)
+    if not title_variants:
+        return None, False
+
+    normalized_rows: list[dict[str, Any]] = []
+    success_count = 0
+    for query in title_variants:
+        try:
+            result = await tmdb_service.search_multi(query, 1)
+            success_count += 1
+        except Exception:
+            continue
+
+        items = result.get("items") or result.get("results") or []
+        if not isinstance(items, list):
+            continue
+        normalized_rows.extend([row for row in items if isinstance(row, dict)])
+
+    tmdb_failed = success_count == 0
+    if not normalized_rows:
+        return None, tmdb_failed
 
     expected_type = "movie" if media_type == "movie" else "tv"
     best, _ = _pick_best_tmdb_match(
         title=title,
         media_type=expected_type,
         year=year,
-        items=[row for row in items if isinstance(row, dict)],
+        items=normalized_rows,
     )
+
+    # Some TMDB entries expose localized re-release dates that can diverge
+    # from Douban's original year; retry once without year as a safe fallback.
+    if not best and year:
+        best, _ = _pick_best_tmdb_match(
+            title=title,
+            media_type=expected_type,
+            year=None,
+            items=normalized_rows,
+        )
+
     if not best:
-        return None
+        return None, tmdb_failed
+
     tmdb_id = best.get("tmdb_id")
-    return int(tmdb_id) if tmdb_id else None
+    return (int(tmdb_id) if tmdb_id else None), tmdb_failed
 
 
 async def resolve_douban_explore_item(
@@ -493,21 +640,32 @@ async def resolve_douban_explore_item(
 
     candidates: list[dict[str, Any]] = []
     nullbr_failed = False
-    nullbr_result: Optional[dict[str, Any]] = None
-    try:
-        nullbr_result = nullbr_service.search(normalized_title, 1)
-    except Exception:
-        nullbr_failed = True
+    title_variants = _build_title_variants(normalized_title)
+    nullbr_rows: list[dict[str, Any]] = []
+    nullbr_success_count = 0
+    for query in title_variants:
+        try:
+            nullbr_result = nullbr_service.search(query, 1)
+            nullbr_success_count += 1
+        except Exception:
+            continue
 
-    if isinstance(nullbr_result, dict):
+        if not isinstance(nullbr_result, dict):
+            continue
         rows = nullbr_result.get("items") or nullbr_result.get("results") or []
         if not isinstance(rows, list):
-            rows = []
+            continue
+        nullbr_rows.extend([row for row in rows if isinstance(row, dict)])
+
+    if nullbr_success_count == 0:
+        nullbr_failed = True
+
+    if nullbr_rows:
         best, candidates = _pick_best_tmdb_match(
             title=normalized_title,
             media_type=normalized_type,
             year=year,
-            items=[row for row in rows if isinstance(row, dict)],
+            items=nullbr_rows,
         )
         if best:
             tmdb_value = int(best["tmdb_id"])
@@ -525,7 +683,11 @@ async def resolve_douban_explore_item(
                 "candidates": candidates,
             }
 
-    tmdb_value = await _resolve_tmdb_id_by_tmdb(normalized_title, normalized_type, year)
+    tmdb_value, tmdb_failed = await _resolve_tmdb_id_by_tmdb_with_status(
+        normalized_title,
+        normalized_type,
+        year,
+    )
     if tmdb_value:
         title_cache_key = _build_tmdb_cache_key(normalized_title, year, normalized_type)
         _set_tmdb_id_cache(title_cache_key, tmdb_value)
@@ -545,7 +707,7 @@ async def resolve_douban_explore_item(
         subject_cache_key = _build_subject_tmdb_cache_key(normalized_douban_id, normalized_type)
         _set_subject_tmdb_cache(subject_cache_key, None)
 
-    if nullbr_failed:
+    if nullbr_failed and tmdb_failed:
         reason = "search_failed"
     elif had_negative_subject_cache:
         reason = "subject_cache_unresolved_rechecked"
@@ -587,8 +749,6 @@ def _normalize_douban_items(
             media_type = default_media_type
 
         poster_url = _normalize_poster_url(item)
-        if poster_url.startswith("http://"):
-            poster_url = poster_url.replace("http://", "https://", 1)
 
         subject_id = _extract_douban_subject_id(item)
         if not subject_id:
@@ -704,6 +864,159 @@ async def _backfill_tmdb_ids(candidates: list[dict[str, Any]]) -> None:
             _tmdb_backfill_inflight.discard(cache_key)
 
     await asyncio.gather(*[_worker(candidate) for candidate in candidates], return_exceptions=True)
+
+
+def _extract_subject_year(payload: dict[str, Any], fallback_year: Optional[str]) -> Optional[str]:
+    if isinstance(fallback_year, str) and re.fullmatch(r"(?:19|20)\d{2}", fallback_year):
+        return fallback_year
+
+    for key in ("year", "release_date", "pubdate", "date"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            match = re.search(r"(?:19|20)\d{2}", value)
+            if match:
+                return match.group(0)
+        elif isinstance(value, list):
+            for node in value:
+                if isinstance(node, str):
+                    match = re.search(r"(?:19|20)\d{2}", node)
+                    if match:
+                        return match.group(0)
+    return None
+
+
+async def fetch_douban_subject_detail(
+    douban_id: str,
+    media_type: str = "movie",
+    client: Optional[httpx.AsyncClient] = None,
+) -> dict[str, Any]:
+    normalized_id = str(douban_id or "").strip()
+    if not normalized_id:
+        raise ValueError("douban_id is required")
+
+    normalized_type = "tv" if media_type == "tv" else "movie"
+    now = time.time()
+    ts = datetime.now().strftime("%Y%m%d")
+    path = f"/subject/{quote(normalized_id, safe='')}"
+    sign_path = f"/api/v2{path}"
+    sig = _douban_sign(path=sign_path, ts=ts)
+    request_url = f"{DOUBAN_FRODO_BASE_URL}{path}"
+    params = {
+        "apiKey": DOUBAN_API_KEY,
+        "os_rom": "android",
+        "_ts": ts,
+        "_sig": sig,
+    }
+    headers = _build_douban_api_headers(now)
+
+    if client is None:
+        async with httpx.AsyncClient(timeout=12.0) as local_client:
+            response = await local_client.get(request_url, params=params, headers=headers)
+            response.raise_for_status()
+            payload = response.json()
+    else:
+        response = await client.get(request_url, params=params, headers=headers)
+        response.raise_for_status()
+        payload = response.json()
+
+    if not isinstance(payload, dict):
+        raise ValueError("invalid douban subject payload")
+
+    title = str(payload.get("title") or payload.get("name") or "").strip()
+    if not title:
+        title = f"豆瓣条目 {normalized_id}"
+
+    year = _extract_subject_year(payload, None)
+    poster_url = ""
+    pic = payload.get("pic")
+    if isinstance(pic, dict):
+        for key in ("large", "normal", "url"):
+            value = pic.get(key)
+            if isinstance(value, str) and value.strip():
+                poster_url = value.strip()
+                break
+
+    if not poster_url:
+        for key in ("cover_url", "cover"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                poster_url = value.strip()
+                break
+            if isinstance(value, dict):
+                url = value.get("url")
+                if isinstance(url, str) and url.strip():
+                    poster_url = url.strip()
+                    break
+
+    if poster_url.startswith("//"):
+        poster_url = f"https:{poster_url}"
+    elif poster_url.startswith("http://"):
+        poster_url = poster_url.replace("http://", "https://", 1)
+
+    intro = str(payload.get("intro") or payload.get("summary") or payload.get("description") or "").strip()
+    original_title = str(payload.get("original_title") or payload.get("aka") or "").strip()
+
+    rating_value: Optional[float] = None
+    rating = payload.get("rating")
+    if isinstance(rating, dict):
+        raw_rating = rating.get("value")
+        if isinstance(raw_rating, (int, float, str)):
+            try:
+                parsed = float(raw_rating)
+                if parsed > 0:
+                    rating_value = parsed
+            except Exception:
+                rating_value = None
+
+    genres: list[str] = []
+    for node in payload.get("genres") or []:
+        if isinstance(node, str) and node.strip():
+            genres.append(node.strip())
+        elif isinstance(node, dict):
+            name = node.get("name")
+            if isinstance(name, str) and name.strip():
+                genres.append(name.strip())
+
+    casts: list[str] = []
+    for node in payload.get("actors") or payload.get("casts") or []:
+        if isinstance(node, str) and node.strip():
+            casts.append(node.strip())
+        elif isinstance(node, dict):
+            name = node.get("name") or node.get("title")
+            if isinstance(name, str) and name.strip():
+                casts.append(name.strip())
+
+    source_url = _build_douban_web_subject_url(normalized_id, normalized_type)
+
+    resolved = await resolve_douban_explore_item(
+        douban_id=normalized_id,
+        title=title,
+        media_type=normalized_type,
+        year=year,
+        tmdb_id=None,
+    )
+    resolved_tmdb_id = resolved.get("tmdb_id")
+    tmdb_id = int(resolved_tmdb_id) if isinstance(resolved_tmdb_id, int) and resolved_tmdb_id > 0 else None
+
+    return {
+        "douban_id": normalized_id,
+        "media_type": normalized_type,
+        "title": title,
+        "original_title": original_title,
+        "year": year,
+        "poster_url": poster_url,
+        "intro": intro,
+        "rating": rating_value,
+        "genres": genres,
+        "casts": casts,
+        "source_url": source_url,
+        "tmdb_mapping": {
+            "resolved": bool(tmdb_id),
+            "tmdb_id": tmdb_id,
+            "reason": resolved.get("reason"),
+            "confidence": float(resolved.get("confidence") or 0.0),
+        },
+    }
 
 
 def _schedule_tmdb_backfill(candidates: list[dict[str, Any]], limit: int) -> None:

@@ -1,4 +1,5 @@
 import asyncio
+from collections import OrderedDict
 import hashlib
 import logging
 import re
@@ -13,6 +14,7 @@ from fastapi.responses import Response
 
 from app.services.douban_explore_service import (
     DOUBAN_SECTION_SOURCES,
+    fetch_douban_subject_detail,
     fetch_douban_section,
     resolve_douban_explore_item,
 )
@@ -71,6 +73,10 @@ _image_proxy_user_agent = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 )
+IMAGE_PROXY_CACHE_TTL_SECONDS = 60 * 60
+IMAGE_PROXY_CACHE_MAX_ITEMS = 512
+_image_proxy_cache: "OrderedDict[str, tuple[float, bytes, str]]" = OrderedDict()
+_image_proxy_cache_lock = asyncio.Lock()
 _pan115_share_url_pattern = re.compile(
     r"(https?://(?:115(?:cdn)?\.com/s/[A-Za-z0-9]+(?:[^\s\"'<>]*)?|share\.115\.com/[A-Za-z0-9]+(?:[^\s\"'<>]*)?))",
     re.IGNORECASE,
@@ -466,6 +472,61 @@ def _is_allowed_image_proxy_url(raw_url: str) -> bool:
     if host == "image.tmdb.org":
         return True
     return False
+
+
+def _normalize_image_proxy_size(raw_size: str | None) -> str:
+    normalized = str(raw_size or "").strip().lower()
+    if normalized in {"small", "medium", "large"}:
+        return normalized
+    return "medium"
+
+
+def _rewrite_tmdb_poster_size(raw_url: str, size: str) -> str:
+    try:
+        parsed = urlparse(raw_url)
+    except Exception:
+        return raw_url
+
+    host = (parsed.hostname or "").lower()
+    if host != "image.tmdb.org":
+        return raw_url
+
+    target_size = {
+        "small": "w342",
+        "medium": "w500",
+        "large": "w780",
+    }.get(size, "w500")
+
+    rewritten_path = re.sub(r"^/t/p/[^/]+/", f"/t/p/{target_size}/", parsed.path)
+    if rewritten_path == parsed.path:
+        return raw_url
+
+    base = f"{parsed.scheme or 'https'}://image.tmdb.org{rewritten_path}"
+    if parsed.query:
+        return f"{base}?{parsed.query}"
+    return base
+
+
+async def _get_cached_proxy_image(cache_key: str) -> tuple[bytes, str] | None:
+    now = time.time()
+    async with _image_proxy_cache_lock:
+        cached = _image_proxy_cache.get(cache_key)
+        if not cached:
+            return None
+        expires_at, content, content_type = cached
+        if expires_at <= now:
+            _image_proxy_cache.pop(cache_key, None)
+            return None
+        _image_proxy_cache.move_to_end(cache_key)
+        return content, content_type
+
+
+async def _set_cached_proxy_image(cache_key: str, content: bytes, content_type: str) -> None:
+    async with _image_proxy_cache_lock:
+        _image_proxy_cache[cache_key] = (time.time() + IMAGE_PROXY_CACHE_TTL_SECONDS, content, content_type)
+        _image_proxy_cache.move_to_end(cache_key)
+        while len(_image_proxy_cache) > IMAGE_PROXY_CACHE_MAX_ITEMS:
+            _image_proxy_cache.popitem(last=False)
 
 
 def _normalize_popular_items(raw_items):
@@ -965,34 +1026,73 @@ async def resolve_explore_item(payload: dict[str, Any] = Body(default={})):
     return result
 
 
+@router.get("/douban/subject/{douban_id}")
+async def get_douban_subject_detail(
+    douban_id: str,
+    media_type: str = Query("movie", description="movie|tv"),
+):
+    normalized_type = "tv" if str(media_type or "").strip().lower() == "tv" else "movie"
+    try:
+        detail = await fetch_douban_subject_detail(douban_id=douban_id, media_type=normalized_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch douban subject: {str(exc)}")
+    return detail
+
+
 @router.get("/explore/poster")
 async def proxy_explore_poster(
     url: str = Query(..., description="Poster image url"),
+    size: str = Query("medium", description="Poster size: small|medium|large"),
 ):
     if not _is_allowed_image_proxy_url(url):
         raise HTTPException(status_code=400, detail="Poster url is not allowed")
+
+    normalized_size = _normalize_image_proxy_size(size)
+    effective_url = _rewrite_tmdb_poster_size(url, normalized_size)
+    cache_key = f"{normalized_size}:{effective_url}"
+
+    cached = await _get_cached_proxy_image(cache_key)
+    if cached:
+        content, content_type = cached
+        return Response(
+            content=content,
+            media_type=content_type,
+            headers={
+                "Cache-Control": "public, max-age=604800",
+                "X-Poster-Cache": "HIT",
+            },
+        )
+
+    parsed = urlparse(effective_url)
+    host = (parsed.hostname or "").lower()
 
     headers = {
         "User-Agent": _image_proxy_user_agent,
         "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-        "Referer": "https://m.douban.com/",
-        "Origin": "https://m.douban.com",
-        "Cache-Control": "no-cache",
     }
+    if host == "doubanio.com" or host.endswith(".doubanio.com"):
+        headers["Referer"] = "https://m.douban.com/"
+        headers["Origin"] = "https://m.douban.com"
 
     try:
         async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
-            image_resp = await client.get(url, headers=headers)
+            image_resp = await client.get(effective_url, headers=headers)
             image_resp.raise_for_status()
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to fetch poster: {str(exc)}")
 
     content_type = image_resp.headers.get("content-type", "image/jpeg")
+    await _set_cached_proxy_image(cache_key, image_resp.content, content_type)
     return Response(
         content=image_resp.content,
         media_type=content_type,
-        headers={"Cache-Control": "public, max-age=86400"},
+        headers={
+            "Cache-Control": "public, max-age=604800",
+            "X-Poster-Cache": "MISS",
+        },
     )
 
 

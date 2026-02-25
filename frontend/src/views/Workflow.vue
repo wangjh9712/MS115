@@ -6,7 +6,8 @@
     </div>
 
     <el-card>
-      <el-table :data="workflows" v-loading="loading" size="small">
+      <div class="table-wrap">
+        <el-table :data="workflows" v-loading="loading" size="small">
         <el-table-column prop="name" label="名称" min-width="160" />
         <el-table-column prop="trigger_type" label="触发方式" width="120" />
         <el-table-column prop="timer" label="定时表达式" min-width="140" />
@@ -20,7 +21,8 @@
             <el-button text type="danger" @click="deleteWorkflow(row.id)">删除</el-button>
           </template>
         </el-table-column>
-      </el-table>
+        </el-table>
+      </div>
     </el-card>
   </div>
 </template>
@@ -101,6 +103,28 @@ onMounted(refreshWorkflows)
     display: flex;
     justify-content: space-between;
     align-items: center;
+  }
+
+  .table-wrap {
+    overflow-x: auto;
+
+    .el-table {
+      min-width: 840px;
+    }
+  }
+}
+
+@media (max-width: 1024px) {
+  .workflow-page {
+    .page-header {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 10px;
+
+      :deep(.el-button) {
+        width: 100%;
+      }
+    }
   }
 }
 </style>

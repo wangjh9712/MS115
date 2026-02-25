@@ -38,7 +38,7 @@
       <div class="recommend-sections" v-loading="exploreLoading">
         <template v-if="exploreSections.length > 0">
           <div
-            v-for="section in exploreSections"
+            v-for="(section, sectionIndex) in exploreSections"
             :key="section.key"
             class="recommend-group"
           >
@@ -113,7 +113,7 @@
                 @dragstart.prevent
               >
                 <el-card
-                  v-for="item in section.displayItems"
+                  v-for="(item, itemIndex) in section.displayItems"
                   :key="`${section.key}-${item.id}-${item.rank}`"
                   class="recommend-card"
                   :class="{ 'just-saved': item.justSaved }"
@@ -123,8 +123,11 @@
                 >
                   <div class="poster-wrapper">
                     <img
-                      :src="getPosterUrl(item.poster_url || item.poster_path)"
+                      :src="getPosterUrl(item.poster_url || item.poster_path, { compact: !isPriorityExplorePoster(sectionIndex, itemIndex) })"
                       :alt="item.title"
+                      :loading="isPriorityExplorePoster(sectionIndex, itemIndex) ? 'eager' : 'lazy'"
+                      :fetchpriority="isPriorityExplorePoster(sectionIndex, itemIndex) ? 'high' : 'auto'"
+                      decoding="async"
                       draggable="false"
                       @error="handleImageError"
                     />
@@ -211,6 +214,8 @@
               <img
                 :src="getPosterUrl(item.poster_path)"
                 :alt="item.name || item.title"
+                loading="lazy"
+                decoding="async"
                 @error="handleImageError"
               />
               <div class="media-type-tag">
@@ -398,6 +403,14 @@ const goToDetail = (mediaType, tmdbId) => {
   router.push(path)
 }
 
+const goToDoubanDetail = (item) => {
+  const doubanId = String(item?.douban_id || item?.id || '').trim()
+  if (!doubanId) return false
+  const mediaType = item?.media_type === 'tv' ? 'tv' : 'movie'
+  router.push(`/douban/${mediaType}/${encodeURIComponent(doubanId)}`)
+  return true
+}
+
 const hasNullbrResources = async (target) => {
   if (!target) return
   const cacheValue = nullbrCheckCache.value[target.key]
@@ -436,6 +449,7 @@ const resolveExploreSpeedMode = () => {
 }
 const EXPLORE_SPEED_MODE = resolveExploreSpeedMode()
 const HOME_SECTION_BATCH_SIZE = 30
+const EXPLORE_HERO_POSTER_COUNT = 6
 const HOME_SECTION_PREFETCH_ROUNDS = EXPLORE_SPEED_MODE === 'extreme' ? 3 : 1
 const HOME_SECTION_PREFETCH_DELAY_MS = EXPLORE_SPEED_MODE === 'extreme' ? 12 : 36
 const HOME_SECTION_CACHE_TTL_MS = 5 * 60 * 1000
@@ -584,6 +598,20 @@ const withTitleHint = (item, message) => {
   return `《${getExploreItemTitle(item)}》${message}`
 }
 
+const getResolveFailureMessage = (reason) => {
+  const normalizedReason = String(reason || '')
+  if (normalizedReason === 'low_confidence_or_ambiguous') {
+    return 'TMDB 匹配冲突，请换个条目或稍后重试'
+  }
+  if (normalizedReason === 'search_failed') {
+    return '上游搜索失败，请稍后重试'
+  }
+  if (normalizedReason.startsWith('subject_cache_unresolved')) {
+    return '缓存未命中，已尝试重新匹配，请稍后重试'
+  }
+  return '未能唯一匹配到 TMDB 详情，请稍后重试'
+}
+
 const getDefaultTransferFolderId = async () => {
   try {
     const { data } = await pan115Api.getDefaultFolder()
@@ -616,7 +644,11 @@ const handleExploreSubscribe = async (item) => {
   const mediaType = routeInfo?.media_type
   const tmdbId = toValidTmdbId(routeInfo?.tmdb_id)
   if (!tmdbId || (mediaType !== 'movie' && mediaType !== 'tv')) {
-    ElMessage.warning('未找到可用的影视条目')
+    if (exploreSource.value === 'douban' && goToDoubanDetail(item)) {
+      ElMessage.info('已跳转豆瓣详情，可在详情页继续匹配 TMDB 后订阅')
+      return
+    }
+    ElMessage.warning(getResolveFailureMessage(routeInfo?.reason))
     return
   }
 
@@ -692,7 +724,11 @@ const handleExploreSave = async (item) => {
   const mediaType = routeInfo?.media_type
   const tmdbId = toValidTmdbId(routeInfo?.tmdb_id)
   if (!tmdbId || (mediaType !== 'movie' && mediaType !== 'tv')) {
-    ElMessage.warning(withTitleHint(item, '未找到可用的影视条目'))
+    if (exploreSource.value === 'douban' && goToDoubanDetail(item)) {
+      ElMessage.info(withTitleHint(item, '已跳转豆瓣详情，可直接使用豆瓣关键词 115 转存'))
+      return
+    }
+    ElMessage.warning(withTitleHint(item, getResolveFailureMessage(routeInfo?.reason)))
     return
   }
 
@@ -1024,17 +1060,32 @@ const endDrag = (event) => {
   }
 }
 
-const getPosterUrl = (path) => {
+const rewriteTmdbPosterSize = (url, compact = false) => {
+  const targetSegment = compact ? '/t/p/w342/' : '/t/p/w500/'
+  return String(url).replace(/\/t\/p\/[^/]+\//, targetSegment)
+}
+
+const getPosterUrl = (path, options = {}) => {
+  const compact = options.compact !== false
   if (!path) return new URL('/no-poster.png', import.meta.url).href
-  if (String(path).startsWith('http://') || String(path).startsWith('https://')) {
-    const rawUrl = String(path)
+  const source = String(path).trim()
+  const rawUrl = source.startsWith('//') ? `https:${source}` : source
+  if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
     if (rawUrl.includes('doubanio.com')) {
-      return `/api/search/explore/poster?url=${encodeURIComponent(rawUrl)}`
+      const size = compact ? 'small' : 'medium'
+      return `/api/search/explore/poster?url=${encodeURIComponent(rawUrl)}&size=${size}`
+    }
+    if (rawUrl.includes('image.tmdb.org')) {
+      return rewriteTmdbPosterSize(rawUrl, compact)
     }
     return rawUrl
   }
-  if (String(path).startsWith('/')) return TMDB_IMAGE_BASE + path
+  if (String(path).startsWith('/')) return rewriteTmdbPosterSize(`${TMDB_IMAGE_BASE}${path}`, compact)
   return new URL('/no-poster.png', import.meta.url).href
+}
+
+const isPriorityExplorePoster = (sectionIndex, itemIndex) => {
+  return Number(sectionIndex) === 0 && Number(itemIndex) < EXPLORE_HERO_POSTER_COUNT
 }
 
 const handleImageError = (e) => {
@@ -1263,7 +1314,7 @@ const resolveExploreItemRoute = async (item) => {
     let { data } = await searchApi.resolveExploreItem(payload)
 
     // Legacy backend may cache unresolved douban_id aggressively; retry once without douban_id.
-    if (!data?.resolved && data?.reason === 'subject_cache_unresolved') {
+    if (!data?.resolved && String(data?.reason || '').startsWith('subject_cache_unresolved')) {
       const retryPayload = {
         ...payload,
         id: '',
@@ -1274,21 +1325,35 @@ const resolveExploreItemRoute = async (item) => {
     }
 
     const resolvedTmdbId = toValidTmdbId(data?.tmdb_id)
-    if (!data?.resolved || !resolvedTmdbId) return null
+    if (!data?.resolved || !resolvedTmdbId) {
+      return {
+        media_type: data?.media_type === 'tv' ? 'tv' : directType,
+        tmdb_id: null,
+        reason: String(data?.reason || 'low_confidence_or_ambiguous')
+      }
+    }
     const resolvedType = data.media_type === 'tv' ? 'tv' : 'movie'
     return { media_type: resolvedType, tmdb_id: resolvedTmdbId }
   } catch (error) {
     console.error('Failed to resolve explore item route:', error)
-    return null
+    return {
+      media_type: directType,
+      tmdb_id: null,
+      reason: 'search_failed'
+    }
   }
 }
 
 const handleExploreItemClick = async (item) => {
   if (Date.now() - lastDragAt.value < 100) return
+
+  if (exploreSource.value === 'douban' && goToDoubanDetail(item)) {
+    return
+  }
   
   const routeInfo = await resolveExploreItemRoute(item)
   if (!routeInfo?.tmdb_id) {
-    ElMessage.warning('未能唯一匹配到 TMDB 详情，请稍后重试')
+    ElMessage.warning(getResolveFailureMessage(routeInfo?.reason))
     return
   }
 
@@ -1506,11 +1571,56 @@ onBeforeUnmount(() => {
   
   .search-header {
     margin-bottom: 24px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
     
     :deep(.el-input) {
+      --search-pill-bg: rgba(17, 37, 72, 0.82);
+      width: 100%;
+
       .el-input__wrapper {
-        border-radius: 12px;
-        padding: 4px 12px;
+        border-radius: 10px;
+        min-height: 44px;
+        padding: 0 12px;
+        background: var(--search-pill-bg);
+        box-shadow: none;
+      }
+
+      .el-input-group__prepend,
+      .el-input-group__append {
+        background: var(--search-pill-bg);
+        border: none;
+        box-shadow: none;
+      }
+
+      .el-input-group__prepend {
+        border-radius: 10px 0 0 10px;
+        padding-left: 10px;
+      }
+
+      .el-input-group__append {
+        border-radius: 0 10px 10px 0;
+        padding-right: 6px;
+      }
+
+      .el-input-group__prepend .el-button,
+      .el-input-group__append .el-button {
+        border: 0;
+      }
+
+      .el-input-group__prepend .el-button {
+        color: var(--ms-text-secondary);
+      }
+
+      .el-input-group__append .el-button {
+        border-radius: 8px;
+        padding-inline: 16px;
+      }
+
+      &.is-focus .el-input__wrapper {
+        box-shadow: 0 0 0 1px rgba(45, 153, 255, 0.35), 0 0 20px rgba(45, 153, 255, 0.14);
       }
     }
   }
@@ -2000,6 +2110,18 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 768px) {
+  .explore-page .search-header :deep(.el-input .el-input__wrapper) {
+    min-height: 40px;
+  }
+
+  .explore-page .search-header :deep(.el-input-group__prepend) {
+    padding-left: 6px;
+  }
+
+  .explore-page .search-header :deep(.el-input-group__append .el-button) {
+    padding-inline: 12px;
+  }
+
   .explore-page .explore-section .recommend-group .recommend-card .poster-wrapper .explore-card-actions {
     opacity: 1;
     transform: translate(-50%, 0);

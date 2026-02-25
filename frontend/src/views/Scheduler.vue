@@ -9,35 +9,39 @@
       <template #header>
         <div class="card-title">运行中任务</div>
       </template>
-      <el-table :data="jobs" v-loading="loading" size="small">
-        <el-table-column prop="id" label="任务ID" min-width="180" />
-        <el-table-column prop="kind" label="类型" width="100" />
-        <el-table-column prop="next_run_time" label="下次运行" min-width="180" :formatter="formatBeijingTableCell" />
-        <el-table-column label="操作" width="120">
-          <template #default="{ row }">
-            <el-button type="primary" text @click="runJob(row.id)">立即执行</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+      <div class="table-wrap">
+        <el-table :data="jobs" v-loading="loading" size="small">
+          <el-table-column prop="id" label="任务ID" min-width="180" />
+          <el-table-column prop="kind" label="类型" width="100" />
+          <el-table-column prop="next_run_time" label="下次运行" min-width="180" :formatter="formatBeijingTableCell" />
+          <el-table-column label="操作" width="120">
+            <template #default="{ row }">
+              <el-button type="primary" text @click="runJob(row.id)">立即执行</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
     </el-card>
 
     <el-card class="section-card">
       <template #header>
         <div class="card-title">动态任务</div>
       </template>
-      <el-table :data="tasks" v-loading="loading" size="small">
-        <el-table-column prop="name" label="名称" min-width="140" />
-        <el-table-column prop="job_key" label="Job Key" min-width="180" />
-        <el-table-column prop="trigger_type" label="触发类型" width="100" />
-        <el-table-column prop="state" label="状态" width="80" />
-        <el-table-column label="操作" width="160">
-          <template #default="{ row }">
-            <el-button type="success" text @click="enableTask(row)" v-if="!row.enabled">启用</el-button>
-            <el-button type="warning" text @click="pauseTask(row)" v-else>暂停</el-button>
-            <el-button type="danger" text @click="deleteTask(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+      <div class="table-wrap">
+        <el-table :data="tasks" v-loading="loading" size="small">
+          <el-table-column prop="name" label="名称" min-width="140" />
+          <el-table-column prop="job_key" label="Job Key" min-width="180" />
+          <el-table-column prop="trigger_type" label="触发类型" width="100" />
+          <el-table-column prop="state" label="状态" width="80" />
+          <el-table-column label="操作" width="160">
+            <template #default="{ row }">
+              <el-button type="success" text @click="enableTask(row)" v-if="!row.enabled">启用</el-button>
+              <el-button type="warning" text @click="pauseTask(row)" v-else>暂停</el-button>
+              <el-button type="danger" text @click="deleteTask(row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
     </el-card>
   </div>
 </template>
@@ -127,9 +131,33 @@ onMounted(refreshAll)
   }
 
   .section-card {
+    .table-wrap {
+      overflow-x: auto;
+    }
+
     .card-title {
       font-weight: 600;
       color: var(--ms-text-primary);
+    }
+  }
+}
+
+@media (max-width: 1024px) {
+  .scheduler-page {
+    .page-header {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 10px;
+
+      :deep(.el-button) {
+        width: 100%;
+      }
+    }
+
+    .section-card {
+      .table-wrap .el-table {
+        min-width: 620px;
+      }
     }
   }
 }

@@ -66,6 +66,11 @@ const routes = [
     path: '/tv/:id',
     name: 'TvDetail',
     component: () => import('@/views/TvDetail.vue')
+  },
+  {
+    path: '/douban/:mediaType(movie|tv)/:id',
+    name: 'DoubanDetail',
+    component: () => import('@/views/DoubanDetail.vue')
   }
 ]
 

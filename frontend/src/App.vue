@@ -1,7 +1,7 @@
 <template>
   <el-config-provider :locale="zhCn">
-    <el-container class="app-container">
-      <el-aside width="240px" class="app-aside">
+    <el-container class="app-container" :class="{ 'is-compact': isCompact }">
+      <el-aside v-if="!isCompact" width="240px" class="app-aside">
         <div
           class="logo"
           role="button"
@@ -76,14 +76,90 @@
           </div>
         </div>
       </el-aside>
-      <el-main class="app-main">
-        <router-view v-slot="{ Component }">
-          <transition name="page-fade" mode="out-in">
-            <component :is="Component" />
-          </transition>
-        </router-view>
-      </el-main>
+
+      <el-container class="app-content-container">
+        <header v-if="isCompact" class="mobile-topbar">
+          <el-button text class="menu-toggle" @click="mobileMenuOpen = true">菜单</el-button>
+          <div class="mobile-brand" @click="handleGoHome">MediaSync 115</div>
+          <el-radio-group v-model="themeMode" size="small" class="mobile-theme-mode">
+            <el-radio-button label="auto">自动</el-radio-button>
+            <el-radio-button label="light">浅色</el-radio-button>
+            <el-radio-button label="dark">深色</el-radio-button>
+          </el-radio-group>
+        </header>
+
+        <el-main class="app-main">
+          <router-view v-slot="{ Component }">
+            <transition name="page-fade" mode="out-in">
+              <component :is="Component" />
+            </transition>
+          </router-view>
+        </el-main>
+      </el-container>
     </el-container>
+
+    <el-drawer
+      v-model="mobileMenuOpen"
+      direction="ltr"
+      :with-header="false"
+      size="280px"
+      class="mobile-nav-drawer"
+    >
+      <div class="mobile-nav-body">
+        <div class="logo" role="button" tabindex="0" @click="handleDrawerGoHome">
+          <div class="logo-icon">
+            <el-icon :size="24"><VideoCamera /></el-icon>
+          </div>
+          <div class="logo-text">
+            <span class="logo-title">MediaSync</span>
+            <span class="logo-badge">115</span>
+          </div>
+        </div>
+        <el-menu :default-active="activeMenu" router @select="handleDrawerNavigate">
+          <el-sub-menu index="/explore">
+            <template #title>
+              <el-icon><Search /></el-icon>
+              <span>探索</span>
+            </template>
+            <el-menu-item index="/explore/douban">豆瓣榜单</el-menu-item>
+            <el-menu-item index="/explore/tmdb">TMDB榜单</el-menu-item>
+          </el-sub-menu>
+          <el-menu-item index="/subscriptions">
+            <el-icon><Star /></el-icon>
+            <span>订阅</span>
+          </el-menu-item>
+          <el-menu-item index="/downloads">
+            <el-icon><Download /></el-icon>
+            <span>离线下载</span>
+          </el-menu-item>
+          <el-menu-item index="/logs">
+            <el-icon><Document /></el-icon>
+            <span>日志</span>
+          </el-menu-item>
+          <el-menu-item index="/scheduler">
+            <el-icon><Clock /></el-icon>
+            <span>调度中心</span>
+          </el-menu-item>
+          <el-menu-item index="/workflow">
+            <el-icon><Connection /></el-icon>
+            <span>工作流</span>
+          </el-menu-item>
+          <el-menu-item index="/settings">
+            <el-icon><Setting /></el-icon>
+            <span>设置</span>
+          </el-menu-item>
+        </el-menu>
+        <div class="aside-footer">
+          <div class="timezone-info">
+            <span class="timezone-label">北京时间</span>
+            <span class="timezone-value">{{ beijingNow }}</span>
+          </div>
+          <div class="version-info">
+            <span>v1.0.0</span>
+          </div>
+        </div>
+      </div>
+    </el-drawer>
   </el-config-provider>
 </template>
 
@@ -101,6 +177,8 @@ const supportsMatchMedia = typeof window !== 'undefined' && typeof window.matchM
 const themeMode = ref(getInitialThemeMode())
 const systemDark = ref(supportsMatchMedia ? window.matchMedia('(prefers-color-scheme: dark)').matches : true)
 const beijingNow = ref(formatBeijingDateTime(new Date()))
+const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1280)
+const mobileMenuOpen = ref(false)
 
 const activeMenu = computed(() => {
   if (route.path.startsWith('/explore/tmdb')) return '/explore/tmdb'
@@ -112,6 +190,8 @@ const resolvedTheme = computed(() => {
   if (themeMode.value === 'light' || themeMode.value === 'dark') return themeMode.value
   return systemDark.value ? 'dark' : 'light'
 })
+
+const isCompact = computed(() => viewportWidth.value <= 1024)
 
 let systemThemeMedia = null
 let clockTimer = null
@@ -144,6 +224,19 @@ function handleGoHome() {
   router.push('/')
 }
 
+function handleDrawerGoHome() {
+  mobileMenuOpen.value = false
+  handleGoHome()
+}
+
+function handleDrawerNavigate() {
+  mobileMenuOpen.value = false
+}
+
+function handleResize() {
+  viewportWidth.value = window.innerWidth
+}
+
 watch(themeMode, (value) => {
   window.localStorage.setItem(THEME_STORAGE_KEY, value)
 })
@@ -152,11 +245,23 @@ watch(resolvedTheme, (value) => {
   applyTheme(value)
 }, { immediate: true })
 
+watch(() => route.path, () => {
+  mobileMenuOpen.value = false
+})
+
+watch(isCompact, (compact) => {
+  if (!compact) {
+    mobileMenuOpen.value = false
+  }
+})
+
 onMounted(() => {
   if (supportsMatchMedia) {
     systemThemeMedia = window.matchMedia('(prefers-color-scheme: dark)')
     systemThemeMedia.addEventListener('change', handleSystemThemeChange)
   }
+
+  window.addEventListener('resize', handleResize)
 
   tickBeijingClock()
   clockTimer = window.setInterval(tickBeijingClock, 1000)
@@ -169,6 +274,7 @@ onBeforeUnmount(() => {
   if (clockTimer) {
     window.clearInterval(clockTimer)
   }
+  window.removeEventListener('resize', handleResize)
 })
 </script>
 
@@ -186,6 +292,10 @@ html, body, #app {
   height: 100%;
 }
 
+.app-content-container {
+  min-width: 0;
+}
+
 .app-aside {
   background: var(--ms-glass-bg-heavy);
   border-right: 1px solid var(--ms-glass-border);
@@ -193,8 +303,7 @@ html, body, #app {
   display: flex;
   flex-direction: column;
   position: relative;
-  
-  // 装饰性光效
+
   &::before {
     content: '';
     position: absolute;
@@ -220,7 +329,7 @@ html, body, #app {
       outline: 2px solid var(--ms-accent-primary);
       outline-offset: -2px;
     }
-    
+
     .logo-icon {
       width: 42px;
       height: 42px;
@@ -232,12 +341,12 @@ html, body, #app {
       color: #fff;
       box-shadow: var(--ms-shadow-md);
     }
-    
+
     .logo-text {
       display: flex;
       align-items: baseline;
       gap: 6px;
-      
+
       .logo-title {
         font-size: 20px;
         font-weight: 700;
@@ -247,7 +356,7 @@ html, body, #app {
         background-clip: text;
         letter-spacing: -0.5px;
       }
-      
+
       .logo-badge {
         font-size: 12px;
         font-weight: 700;
@@ -265,7 +374,7 @@ html, body, #app {
     background: transparent;
     padding: 16px 0;
   }
-  
+
   .aside-footer {
     padding: 16px 20px;
     border-top: 1px solid var(--ms-glass-border);
@@ -299,12 +408,12 @@ html, body, #app {
         font-variant-numeric: tabular-nums;
       }
     }
-    
+
     .version-info {
       display: flex;
       align-items: center;
       justify-content: center;
-      
+
       span {
         font-size: 12px;
         color: var(--ms-text-muted);
@@ -314,13 +423,47 @@ html, body, #app {
   }
 }
 
+.mobile-topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--ms-glass-border);
+  background: var(--ms-glass-bg-heavy);
+  backdrop-filter: blur(18px);
+
+  .menu-toggle {
+    padding: 0 4px;
+    font-weight: 600;
+    color: var(--ms-text-secondary);
+  }
+
+  .mobile-brand {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--ms-text-primary);
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .mobile-theme-mode {
+    margin-left: auto;
+
+    .el-radio-button__inner {
+      padding: 6px 8px;
+      min-width: 48px;
+      font-size: 12px;
+    }
+  }
+}
+
 .app-main {
   background: var(--ms-bg-primary);
   padding: 24px 32px;
   overflow-y: auto;
   position: relative;
-  
-  // 背景装饰
+
   &::before {
     content: '';
     position: fixed;
@@ -331,7 +474,7 @@ html, body, #app {
     background: radial-gradient(ellipse, rgba(36, 137, 255, 0.16) 0%, transparent 60%);
     pointer-events: none;
   }
-  
+
   &::after {
     content: '';
     position: fixed;
@@ -344,7 +487,67 @@ html, body, #app {
   }
 }
 
-// 页面切换动画
+.mobile-nav-body {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+
+  .logo {
+    height: 68px;
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    gap: 12px;
+    border-bottom: 1px solid var(--ms-glass-border);
+    cursor: pointer;
+  }
+
+  .logo-icon {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--ms-gradient-primary);
+    border-radius: 12px;
+    color: #fff;
+    box-shadow: var(--ms-shadow-md);
+  }
+
+  .logo-text {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  .logo-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--ms-text-primary);
+  }
+
+  .logo-badge {
+    font-size: 12px;
+    font-weight: 700;
+    padding: 2px 6px;
+    background: var(--ms-gradient-soft);
+    color: var(--ms-accent-primary);
+    border-radius: 4px;
+  }
+
+  .el-menu {
+    flex: 1;
+    border-right: none;
+    background: transparent;
+    padding: 10px 0;
+  }
+
+  .aside-footer {
+    padding: 14px 12px;
+    border-top: 1px solid var(--ms-glass-border);
+  }
+}
+
 .page-fade-enter-active,
 .page-fade-leave-active {
   transition: opacity 0.22s ease, transform 0.22s ease;
@@ -358,5 +561,46 @@ html, body, #app {
 .page-fade-leave-to {
   opacity: 0;
   transform: translateY(-10px);
+}
+
+@media (max-width: 1024px) {
+  .app-main {
+    padding: 20px;
+
+    &::before {
+      width: 80%;
+      right: -36%;
+    }
+
+    &::after {
+      width: 70%;
+      left: -25%;
+    }
+  }
+}
+
+@media (max-width: 768px) {
+  .mobile-topbar {
+    gap: 8px;
+    padding: 8px 10px;
+
+    .mobile-brand {
+      font-size: 15px;
+      max-width: 110px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .mobile-theme-mode {
+      .el-radio-button__inner {
+        min-width: 40px;
+        padding: 6px 6px;
+      }
+    }
+  }
+
+  .app-main {
+    padding: 14px 12px;
+  }
 }
 </style>

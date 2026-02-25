@@ -35,7 +35,8 @@
         </div>
       </template>
 
-      <el-table :data="offlineTasks" v-loading="loading" style="width: 100%">
+      <div class="table-wrap">
+        <el-table :data="offlineTasks" v-loading="loading" style="width: 100%">
         <el-table-column prop="name" label="文件名" min-width="300">
           <template #default="{ row }">
             <span class="file-name">{{ row.name }}</span>
@@ -83,13 +84,14 @@
             </el-button>
           </template>
         </el-table-column>
-      </el-table>
+        </el-table>
+      </div>
     </el-card>
 
     <el-dialog
       v-model="addDialogVisible"
       title="添加离线任务"
-      width="560px"
+      width="min(560px, 92vw)"
       destroy-on-close
     >
       <el-form label-width="120px">
@@ -415,7 +417,13 @@ onMounted(() => {
 
     .add-form {
       display: flex;
+      flex-wrap: wrap;
       gap: 12px;
+
+      :deep(.el-input) {
+        flex: 1;
+        min-width: 220px;
+      }
     }
 
     .default-folder-tip {
@@ -438,6 +446,14 @@ onMounted(() => {
   }
 
   .tasks-card {
+    .table-wrap {
+      overflow-x: auto;
+
+      .el-table {
+        min-width: 840px;
+      }
+    }
+
     .card-header {
       display: flex;
       justify-content: space-between;
@@ -447,6 +463,45 @@ onMounted(() => {
 
   .file-name {
     color: #e0e0e0;
+  }
+}
+
+@media (max-width: 1024px) {
+  .downloads-page {
+    .page-header {
+      margin-bottom: 16px;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 10px;
+
+      :deep(.el-button) {
+        width: 100%;
+      }
+    }
+
+    .add-card {
+      .add-form {
+        :deep(.el-input) {
+          min-width: 100%;
+        }
+
+        :deep(.el-button) {
+          width: 100%;
+        }
+      }
+    }
+
+    .tasks-card {
+      .card-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+
+        :deep(.el-button) {
+          width: 100%;
+        }
+      }
+    }
   }
 }
 </style>

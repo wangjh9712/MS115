@@ -11,7 +11,7 @@
 
     <div class="cards-grid" v-if="visibleItems.length">
       <el-card
-        v-for="item in visibleItems"
+        v-for="(item, itemIndex) in visibleItems"
         :key="`${item.id}-${item.rank}`"
         class="movie-card"
         :class="{ 'just-saved': item.justSaved }"
@@ -21,8 +21,11 @@
       >
         <div class="poster-wrap">
           <img
-            :src="getPosterUrl(item.poster_url || item.poster_path)"
+            :src="getPosterUrl(item.poster_url || item.poster_path, { compact: itemIndex >= PRIORITY_POSTER_COUNT })"
             :alt="item.title"
+            :loading="itemIndex < PRIORITY_POSTER_COUNT ? 'eager' : 'lazy'"
+            :fetchpriority="itemIndex < PRIORITY_POSTER_COUNT ? 'high' : 'auto'"
+            decoding="async"
             draggable="false"
             @error="handleImageError"
           />
@@ -109,6 +112,7 @@ const remoteTotal = ref(0)
 const nextOffset = ref(0)
 const fetchedOnce = ref(false)
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w500'
+const PRIORITY_POSTER_COUNT = 8
 const API_BATCH_SIZE = 30
 const RENDER_BATCH_SIZE = EXPLORE_SPEED_MODE === 'extreme' ? 30 : 24
 const PREFETCH_BUFFER_SIZE = EXPLORE_SPEED_MODE === 'extreme' ? 96 : 48
@@ -240,16 +244,35 @@ const goBack = () => {
   router.push(`/explore/${exploreSource.value}`)
 }
 
-const getPosterUrl = (path) => {
+const goToDoubanDetail = (item) => {
+  const doubanId = String(item?.douban_id || item?.id || '').trim()
+  if (!doubanId) return false
+  const mediaType = item?.media_type === 'tv' ? 'tv' : 'movie'
+  router.push(`/douban/${mediaType}/${encodeURIComponent(doubanId)}`)
+  return true
+}
+
+const rewriteTmdbPosterSize = (url, compact = false) => {
+  const targetSegment = compact ? '/t/p/w342/' : '/t/p/w500/'
+  return String(url).replace(/\/t\/p\/[^/]+\//, targetSegment)
+}
+
+const getPosterUrl = (path, options = {}) => {
+  const compact = options.compact !== false
   if (!path) return new URL('/no-poster.png', import.meta.url).href
-  const raw = String(path)
+  const source = String(path).trim()
+  const raw = source.startsWith('//') ? `https:${source}` : source
   if (raw.startsWith('http://') || raw.startsWith('https://')) {
     if (raw.includes('doubanio.com')) {
-      return `/api/search/explore/poster?url=${encodeURIComponent(raw)}`
+      const size = compact ? 'small' : 'medium'
+      return `/api/search/explore/poster?url=${encodeURIComponent(raw)}&size=${size}`
+    }
+    if (raw.includes('image.tmdb.org')) {
+      return rewriteTmdbPosterSize(raw, compact)
     }
     return raw
   }
-  if (raw.startsWith('/')) return TMDB_IMAGE_BASE + raw
+  if (raw.startsWith('/')) return rewriteTmdbPosterSize(`${TMDB_IMAGE_BASE}${raw}`, compact)
   return new URL('/no-poster.png', import.meta.url).href
 }
 
@@ -274,6 +297,20 @@ const getExploreItemTitle = (item) => {
 
 const withTitleHint = (item, message) => {
   return `《${getExploreItemTitle(item)}》${message}`
+}
+
+const getResolveFailureMessage = (reason) => {
+  const normalizedReason = String(reason || '')
+  if (normalizedReason === 'low_confidence_or_ambiguous') {
+    return 'TMDB 匹配冲突，请换个条目或稍后重试'
+  }
+  if (normalizedReason === 'search_failed') {
+    return '上游搜索失败，请稍后重试'
+  }
+  if (normalizedReason.startsWith('subject_cache_unresolved')) {
+    return '缓存未命中，已尝试重新匹配，请稍后重试'
+  }
+  return '未能唯一匹配到 TMDB 详情，请稍后重试'
 }
 
 const getDefaultTransferFolderId = async () => {
@@ -321,7 +358,7 @@ const resolveItemRoute = async (item) => {
     let { data } = await searchApi.resolveExploreItem(payload)
 
     // Legacy backend may cache unresolved douban_id aggressively; retry once without douban_id.
-    if (!data?.resolved && data?.reason === 'subject_cache_unresolved') {
+    if (!data?.resolved && String(data?.reason || '').startsWith('subject_cache_unresolved')) {
       const retryPayload = {
         ...payload,
         id: '',
@@ -332,11 +369,21 @@ const resolveItemRoute = async (item) => {
     }
 
     const resolvedTmdbId = toValidTmdbId(data?.tmdb_id)
-    if (!data?.resolved || !resolvedTmdbId) return null
+    if (!data?.resolved || !resolvedTmdbId) {
+      return {
+        mediaType: data?.media_type === 'tv' ? 'tv' : directType,
+        tmdbId: null,
+        reason: String(data?.reason || 'low_confidence_or_ambiguous')
+      }
+    }
     const resolvedType = data.media_type === 'tv' ? 'tv' : 'movie'
     return { mediaType: resolvedType, tmdbId: resolvedTmdbId }
   } catch {
-    return null
+    return {
+      mediaType: directType,
+      tmdbId: null,
+      reason: 'search_failed'
+    }
   }
 }
 
@@ -350,9 +397,13 @@ const warmupPan115 = (mediaType, tmdbId) => {
 }
 
 const handleItemClick = async (item) => {
+  if (exploreSource.value === 'douban' && goToDoubanDetail(item)) {
+    return
+  }
+
   const routeInfo = await resolveItemRoute(item)
   if (!routeInfo?.tmdbId) {
-    ElMessage.warning('未能唯一匹配到 TMDB 详情，请稍后重试')
+    ElMessage.warning(getResolveFailureMessage(routeInfo?.reason))
     return
   }
 
@@ -369,7 +420,11 @@ const handleExploreSubscribe = async (item) => {
 
   const routeInfo = await resolveItemRoute(item)
   if (!routeInfo?.tmdbId || (routeInfo.mediaType !== 'movie' && routeInfo.mediaType !== 'tv')) {
-    ElMessage.warning('未找到可用的影视条目')
+    if (exploreSource.value === 'douban' && goToDoubanDetail(item)) {
+      ElMessage.info('已跳转豆瓣详情，可在详情页继续匹配 TMDB 后订阅')
+      return
+    }
+    ElMessage.warning(getResolveFailureMessage(routeInfo?.reason))
     return
   }
 
@@ -432,7 +487,11 @@ const handleExploreSave = async (item) => {
 
   const routeInfo = await resolveItemRoute(item)
   if (!routeInfo?.tmdbId || (routeInfo.mediaType !== 'movie' && routeInfo.mediaType !== 'tv')) {
-    ElMessage.warning(withTitleHint(item, '未找到可用的影视条目'))
+    if (exploreSource.value === 'douban' && goToDoubanDetail(item)) {
+      ElMessage.info(withTitleHint(item, '已跳转豆瓣详情，可直接使用豆瓣关键词 115 转存'))
+      return
+    }
+    ElMessage.warning(withTitleHint(item, getResolveFailureMessage(routeInfo?.reason)))
     return
   }
 

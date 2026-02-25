@@ -47,6 +47,8 @@ export const searchApi = {
   getExploreSection: (source = 'douban', sectionKey, limit = 30, refresh = false, start = 0) =>
     api.get(`/search/explore/section/${sectionKey}`, { params: { source, limit, refresh, start } }),
   resolveExploreItem: (payload) => api.post('/search/explore/resolve', payload),
+  getDoubanSubject: (doubanId, mediaType = 'movie') =>
+    api.get(`/search/douban/subject/${encodeURIComponent(doubanId)}`, { params: { media_type: mediaType } }),
   getExploreDoubanSections: (limit = 24, refresh = false) =>
     api.get('/search/explore/douban-sections', { params: { limit, refresh } }),
   getExploreDoubanSection: (sectionKey, limit = 30, refresh = false, start = 0) =>
