@@ -187,10 +187,20 @@
           <el-input v-model="selectSaveForm.newFolderName" placeholder="可选，输入名称自动创建" />
         </el-form-item>
       </el-form>
+      <div style="margin-bottom: 10px; display: flex; gap: 8px;">
+        <el-button size="small" :type="fileNameSortOrder === 'asc' ? 'primary' : 'default'" @click="setFileNameSortOrder('asc')">
+          名称升序
+        </el-button>
+        <el-button size="small" :type="fileNameSortOrder === 'desc' ? 'primary' : 'default'" @click="setFileNameSortOrder('desc')">
+          名称降序
+        </el-button>
+      </div>
 
       <div v-loading="extractingFiles">
         <el-table
           :data="shareFilesList"
+          row-key="fid"
+          :reserve-selection="true"
           @selection-change="handleSelectionChange"
           height="400"
           style="width: 100%"
@@ -258,6 +268,7 @@ const extractingFiles = ref(false)
 const selectSaving = ref(false)
 const shareFilesList = ref([])
 const selectedFiles = ref([])
+const fileNameSortOrder = ref('asc')
 const selectSaveForm = ref({
   shareLink: '',
   receiveCode: '',
@@ -667,6 +678,7 @@ const openSelectSaveDialog = async (row) => {
   extractingFiles.value = true
   shareFilesList.value = []
   selectedFiles.value = []
+  fileNameSortOrder.value = 'asc'
   selectSaveDialogVisible.value = true
 
   try {
@@ -683,6 +695,7 @@ const openSelectSaveDialog = async (row) => {
     const { data } = await pan115Api.extractShareFiles(shareLink, receiveCode)
     const allFiles = Array.isArray(data?.list) ? data.list : []
     shareFilesList.value = allFiles.filter((item) => isVideoFile(item?.name))
+    sortShareFilesByName(fileNameSortOrder.value)
     if (shareFilesList.value.length === 0) {
       ElMessage.info('未找到可选的视频文件')
     }
@@ -699,6 +712,21 @@ const handleSelectionChange = (rows) => {
   selectedFiles.value = list
     .map((item) => String(item?.fid || '').trim())
     .filter(Boolean)
+}
+
+const sortShareFilesByName = (order = 'asc') => {
+  const direction = order === 'desc' ? -1 : 1
+  shareFilesList.value = [...shareFilesList.value].sort((a, b) => {
+    const aName = String(a?.name || '')
+    const bName = String(b?.name || '')
+    return aName.localeCompare(bName, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' }) * direction
+  })
+}
+
+const setFileNameSortOrder = (order) => {
+  const nextOrder = order === 'desc' ? 'desc' : 'asc'
+  fileNameSortOrder.value = nextOrder
+  sortShareFilesByName(nextOrder)
 }
 
 const confirmSelectSave = async () => {
@@ -829,6 +857,7 @@ const resetResources = () => {
   selectSaving.value = false
   shareFilesList.value = []
   selectedFiles.value = []
+  fileNameSortOrder.value = 'asc'
 }
 
 const handleRematchTmdb = async () => {

@@ -281,10 +281,20 @@
           <el-input v-model="selectSaveForm.newFolderName" placeholder="可选，输入名称自动创建" />
         </el-form-item>
       </el-form>
+      <div style="margin-bottom: 10px; display: flex; gap: 8px;">
+        <el-button size="small" :type="fileNameSortOrder === 'asc' ? 'primary' : 'default'" @click="setFileNameSortOrder('asc')">
+          名称升序
+        </el-button>
+        <el-button size="small" :type="fileNameSortOrder === 'desc' ? 'primary' : 'default'" @click="setFileNameSortOrder('desc')">
+          名称降序
+        </el-button>
+      </div>
       
       <div v-loading="extractingFiles">
         <el-table 
           :data="shareFilesList" 
+          row-key="fid"
+          :reserve-selection="true"
           @selection-change="handleSelectionChange"
           height="400"
           style="width: 100%"
@@ -373,6 +383,7 @@ const selectSaveDialogVisible = ref(false)
 const extractingFiles = ref(false)
 const shareFilesList = ref([])
 const selectedFiles = ref([])
+const fileNameSortOrder = ref('asc')
 const selectSaveForm = ref({
   shareLink: '',
   targetFolder: '0',
@@ -793,6 +804,7 @@ const handleSelectSave = async (item) => {
 
   shareFilesList.value = []
   selectedFiles.value = []
+  fileNameSortOrder.value = 'asc'
   selectSaveDialogVisible.value = true
   extractingFiles.value = true
 
@@ -802,6 +814,7 @@ const handleSelectSave = async (item) => {
       // 过滤视频文件
       const videoRegex = /\.(mp4|mkv|avi|rmvb|flv|ts|mov|wmv)$/i
       shareFilesList.value = data.list.filter(f => videoRegex.test(f.name || ''))
+      sortShareFilesByName(fileNameSortOrder.value)
     } else {
       ElMessage.warning('提取文件列表失败，分享可能已失效')
     }
@@ -814,6 +827,21 @@ const handleSelectSave = async (item) => {
 
 const handleSelectionChange = (val) => {
   selectedFiles.value = val.map(f => f.fid)
+}
+
+const sortShareFilesByName = (order = 'asc') => {
+  const direction = order === 'desc' ? -1 : 1
+  shareFilesList.value = [...shareFilesList.value].sort((a, b) => {
+    const aName = String(a?.name || '')
+    const bName = String(b?.name || '')
+    return aName.localeCompare(bName, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' }) * direction
+  })
+}
+
+const setFileNameSortOrder = (order) => {
+  const nextOrder = order === 'desc' ? 'desc' : 'asc'
+  fileNameSortOrder.value = nextOrder
+  sortShareFilesByName(nextOrder)
 }
 
 const confirmSelectSave = async () => {
@@ -1187,6 +1215,5 @@ onBeforeUnmount(() => {
   to { opacity: 1; transform: translateY(0); }
 }
 </style>
-
 
 
