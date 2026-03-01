@@ -110,6 +110,54 @@
                 <el-empty v-else :description="pansouTried ? '暂无可用115网盘资源' : '尚未获取 Pansou 资源'" />
               </div>
             </el-tab-pane>
+
+            <el-tab-pane label="HDHive" name="hdhive">
+              <div class="resource-tools">
+                <el-button size="small" type="primary" plain :loading="hdhiveLoading" @click="fetchHdhivePan115">
+                  {{ hdhiveTried ? '刷新 HDHive' : '用 HDHive 获取资源' }}
+                </el-button>
+              </div>
+              <div v-loading="pan115Loading || hdhiveLoading">
+                <el-table v-if="hdhivePan115Resources.length" :data="hdhivePan115Resources" stripe class="resource-table">
+                  <el-table-column label="资源名称" min-width="360" show-overflow-tooltip>
+                    <template #default="{ row }">
+                      <span class="resource-name">{{ row.title || row.name || '未命名资源' }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="来源" width="100" align="center">
+                    <template #default="{ row }">
+                      <el-tag size="small" type="info">{{ row.source_service || 'hdhive' }}</el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="大小" width="110" align="center">
+                    <template #default="{ row }">{{ row.size || '-' }}</template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="180" align="center" fixed="right">
+                    <template #default="{ row }">
+                      <el-button
+                        type="primary"
+                        size="small"
+                        :disabled="row.pan115_savable === false"
+                        :loading="Boolean(row.saving)"
+                        @click="savePan115Resource(row)"
+                      >
+                        转存
+                      </el-button>
+                      <el-button
+                        v-if="mediaType === 'tv'"
+                        size="small"
+                        :disabled="row.pan115_savable === false"
+                        :loading="Boolean(row.extracting)"
+                        @click="openSelectSaveDialog(row)"
+                      >
+                        选集
+                      </el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+                <el-empty v-else :description="hdhiveTried ? 'HDHive 暂无可用115网盘资源' : '尚未获取 HDHive 资源'" />
+              </div>
+            </el-tab-pane>
           </el-tabs>
         </el-tab-pane>
 
@@ -258,6 +306,8 @@ const isSubscribed = ref(false)
 const pan115Loading = ref(false)
 const pansouLoading = ref(false)
 const pansouTried = ref(false)
+const hdhiveLoading = ref(false)
+const hdhiveTried = ref(false)
 const magnetLoading = ref(false)
 const seedhubMagnetLoading = ref(false)
 const seedhubMagnetTried = ref(false)
@@ -289,6 +339,9 @@ const nullbrPan115Resources = computed(() =>
 )
 const pansouPan115Resources = computed(() =>
   pan115Resources.value.filter((item) => item?.source_service === 'pansou')
+)
+const hdhivePan115Resources = computed(() =>
+  pan115Resources.value.filter((item) => item?.source_service === 'hdhive')
 )
 const nullbrMagnetResources = computed(() =>
   magnetResources.value.filter((item) => (item?.source_service || 'nullbr') === 'nullbr')
@@ -410,7 +463,7 @@ const fetchPan115Nullbr = async () => {
       : await searchApi.getMoviePan115(mappedTmdbId.value)
     const nullbrList = (Array.isArray(response.data?.list) ? response.data.list : [])
       .map((item) => ({ ...item, source_service: item.source_service || 'nullbr' }))
-    pan115Resources.value = mergePan115Resources(nullbrList, pansouPan115Resources.value)
+    pan115Resources.value = mergePan115Resources(nullbrList, mergePan115Resources(pansouPan115Resources.value, hdhivePan115Resources.value))
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || error.message || '115资源获取失败')
   } finally {
@@ -450,7 +503,7 @@ const fetchPansouPan115 = async () => {
       pansouList = Array.from(dedup.values()).slice(0, 30)
     }
     const normalized = pansouList.map((item) => ({ ...item, source_service: item.source_service || 'pansou' }))
-    pan115Resources.value = mergePan115Resources(nullbrPan115Resources.value, normalized)
+    pan115Resources.value = mergePan115Resources(mergePan115Resources(nullbrPan115Resources.value, hdhivePan115Resources.value), normalized)
     if (!normalized.length) {
       ElMessage.info('Pansou 暂未找到可用资源')
     }
@@ -458,6 +511,30 @@ const fetchPansouPan115 = async () => {
     ElMessage.error(error.response?.data?.detail || error.message || 'Pansou 资源获取失败')
   } finally {
     pansouLoading.value = false
+  }
+}
+
+const fetchHdhivePan115 = async () => {
+  if (!mappedTmdbId.value || hdhiveLoading.value) return
+  hdhiveLoading.value = true
+  hdhiveTried.value = true
+  try {
+    const response = mediaType.value === 'tv'
+      ? await searchApi.getTvPan115Hdhive(mappedTmdbId.value)
+      : await searchApi.getMoviePan115Hdhive(mappedTmdbId.value)
+    const hdhiveList = (Array.isArray(response.data?.list) ? response.data.list : [])
+      .map((item) => ({ ...item, source_service: item.source_service || 'hdhive' }))
+    pan115Resources.value = mergePan115Resources(
+      mergePan115Resources(nullbrPan115Resources.value, pansouPan115Resources.value),
+      hdhiveList
+    )
+    if (!hdhiveList.length) {
+      ElMessage.info('HDHive 暂未找到可用资源')
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || error.message || 'HDHive 资源获取失败')
+  } finally {
+    hdhiveLoading.value = false
   }
 }
 
@@ -572,6 +649,12 @@ const ensureActiveTabLoaded = async () => {
     if (pan115SourceTab.value === 'pansou') {
       if (pansouPan115Resources.value.length === 0 && !pansouLoading.value && !pansouTried.value) {
         await fetchPansouPan115()
+      }
+      return
+    }
+    if (pan115SourceTab.value === 'hdhive') {
+      if (hdhivePan115Resources.value.length === 0 && !hdhiveLoading.value && !hdhiveTried.value && mappedTmdbId.value) {
+        await fetchHdhivePan115()
       }
       return
     }
@@ -848,6 +931,8 @@ const resetResources = () => {
   pan115Loading.value = false
   pansouLoading.value = false
   pansouTried.value = false
+  hdhiveLoading.value = false
+  hdhiveTried.value = false
   magnetLoading.value = false
   seedhubMagnetLoading.value = false
   seedhubMagnetTried.value = false
@@ -910,6 +995,10 @@ watch(activeTab, async () => {
 watch(pan115SourceTab, async (tab) => {
   if (tab === 'pansou' && pansouPan115Resources.value.length === 0 && !pansouLoading.value && !pansouTried.value) {
     await fetchPansouPan115()
+    return
+  }
+  if (tab === 'hdhive' && hdhivePan115Resources.value.length === 0 && mappedTmdbId.value && !hdhiveLoading.value && !hdhiveTried.value) {
+    await fetchHdhivePan115()
     return
   }
   if (tab === 'nullbr' && nullbrPan115Resources.value.length === 0 && mappedTmdbId.value && !pan115Loading.value) {

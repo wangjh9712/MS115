@@ -60,6 +60,7 @@ export const searchApi = {
   getMovie: (tmdbId) => api.get(`/search/movie/${tmdbId}`),
   getMoviePan115: (tmdbId, page = 1) => api.get(`/search/movie/${tmdbId}/115`, { params: { page } }),
   getMoviePan115Pansou: (tmdbId, page = 1) => api.get(`/search/movie/${tmdbId}/115/pansou`, { params: { page } }),
+  getMoviePan115Hdhive: (tmdbId, page = 1) => api.get(`/search/movie/${tmdbId}/115/hdhive`, { params: { page } }),
   getMovieMagnet: (tmdbId) => api.get(`/search/movie/${tmdbId}/magnet`),
   getMovieMagnetSeedhub: (tmdbId) => api.get(`/search/movie/${tmdbId}/magnet`, { params: { source: 'seedhub' } }),
   createMovieSeedhubMagnetTask: (tmdbId, limit = 40, forceRefresh = false) =>
@@ -70,6 +71,7 @@ export const searchApi = {
   getTv: (tmdbId) => api.get(`/search/tv/${tmdbId}`),
   getTvPan115: (tmdbId, page = 1) => api.get(`/search/tv/${tmdbId}/115`, { params: { page } }),
   getTvPan115Pansou: (tmdbId, page = 1) => api.get(`/search/tv/${tmdbId}/115/pansou`, { params: { page } }),
+  getTvPan115Hdhive: (tmdbId, page = 1) => api.get(`/search/tv/${tmdbId}/115/hdhive`, { params: { page } }),
 
   getTvSeason: (tmdbId, seasonNumber) => api.get(`/search/tv/${tmdbId}/season/${seasonNumber}`),
   getTvSeasonMagnet: (tmdbId, seasonNumber) => api.get(`/search/tv/${tmdbId}/season/${seasonNumber}/magnet`),
@@ -103,7 +105,8 @@ export const pansouApi = {
 export const settingsApi = {
   getRuntime: () => api.get('/settings/runtime'),
   updateRuntime: (payload) => api.put('/settings/runtime', payload),
-  checkNullbr: () => api.get('/settings/nullbr/check')
+  checkNullbr: () => api.get('/settings/nullbr/check'),
+  checkHdhive: () => api.get('/settings/hdhive/check')
 }
 
 export const subscriptionApi = {

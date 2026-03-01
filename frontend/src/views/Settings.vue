@@ -162,6 +162,57 @@
         </el-card>
       </el-tab-pane>
 
+      <el-tab-pane label="HDHive" name="hdhive">
+        <el-card class="settings-card">
+          <template #header>
+            <div class="card-header">
+              <span>HDHive 配置</span>
+              <el-tag v-if="hdhiveStatus.checked" :type="hdhiveStatus.valid ? 'success' : 'danger'" size="small">
+                {{ hdhiveStatus.valid ? '已连接' : '未连接' }}
+              </el-tag>
+            </div>
+          </template>
+
+          <el-form :model="hdhiveForm" label-width="120px">
+            <el-form-item label="Cookie">
+              <el-input
+                v-model="hdhiveForm.cookie"
+                type="textarea"
+                :rows="3"
+                placeholder="请输入 HDHive Cookie（示例：token=xxxx）"
+              />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="savingHdhive" @click="handleSaveHdhive">保存</el-button>
+              <el-button :loading="testingHdhive" @click="handleTestHdhive">测试连接</el-button>
+            </el-form-item>
+          </el-form>
+
+          <div
+            v-if="hdhiveStatus.checked"
+            class="connection-result"
+            :class="hdhiveStatus.valid ? 'is-success' : 'is-failed'"
+          >
+            <div class="result-title">连接检测结果</div>
+            <div class="result-message">{{ hdhiveStatus.message }}</div>
+          </div>
+
+          <div v-if="hdhiveStatus.valid && hdhiveStatus.user" class="user-info">
+            <el-divider />
+            <h4>用户信息</h4>
+            <el-descriptions :column="2" border size="small">
+              <el-descriptions-item label="用户名">
+                {{ hdhiveStatus.user.username || hdhiveStatus.user.nickname || '-' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="会员状态">
+                <el-tag v-if="hdhiveStatus.user.is_vip" type="warning" size="small">会员</el-tag>
+                <el-tag v-else type="info" size="small">非会员</el-tag>
+              </el-descriptions-item>
+            </el-descriptions>
+          </div>
+        </el-card>
+      </el-tab-pane>
+
       <el-tab-pane label="TMDB" name="tmdb">
         <el-card class="settings-card">
           <template #header>
@@ -408,6 +459,10 @@ const nullbrForm = ref({
   baseUrl: ''
 })
 
+const hdhiveForm = ref({
+  cookie: ''
+})
+
 const tmdbForm = ref({
   apiKey: '',
   language: 'zh-CN',
@@ -440,6 +495,8 @@ const savingPansou = ref(false)
 const testingPansou = ref(false)
 const savingNullbr = ref(false)
 const testingNullbr = ref(false)
+const savingHdhive = ref(false)
+const testingHdhive = ref(false)
 const savingTmdb = ref(false)
 const savingScheduler = ref(false)
 const runningNullbr = ref(false)
@@ -473,6 +530,13 @@ const riskHealth = reactive({
   status: '',
   summary: '',
   detail: ''
+})
+
+const hdhiveStatus = reactive({
+  checked: false,
+  valid: false,
+  message: '',
+  user: null
 })
 
 const riskHealthTagType = computed(() => {
@@ -744,6 +808,63 @@ const handleSaveNullbr = () => {
   })
 }
 
+const checkHdhive = async (notify = false) => {
+  try {
+    const { data } = await settingsApi.checkHdhive()
+    hdhiveStatus.checked = true
+    hdhiveStatus.valid = !!data.valid
+    hdhiveStatus.user = data.user || null
+    hdhiveStatus.message = data.valid
+      ? `连接成功：${data.user?.username || data.user?.nickname || '用户信息已获取'}`
+      : `连接失败：${data.message || '请检查 Cookie'}`
+
+    if (notify) {
+      if (data.valid) {
+        ElMessage.success(hdhiveStatus.message)
+      } else {
+        ElMessage.error(hdhiveStatus.message)
+      }
+    }
+  } catch (error) {
+    hdhiveStatus.checked = true
+    hdhiveStatus.valid = false
+    hdhiveStatus.user = null
+    hdhiveStatus.message = error.response?.data?.detail || '连接失败，请检查 Cookie 配置'
+    if (notify) {
+      ElMessage.error(hdhiveStatus.message)
+    }
+  }
+}
+
+const handleSaveHdhive = async () => {
+  if (!String(hdhiveForm.value.cookie || '').trim()) {
+    ElMessage.warning('请输入 HDHive Cookie')
+    return
+  }
+
+  savingHdhive.value = true
+  try {
+    await settingsApi.updateRuntime({
+      hdhive_cookie: hdhiveForm.value.cookie
+    })
+    ElMessage.success('HDHive Cookie 已保存')
+    await checkHdhive(false)
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || 'HDHive 配置保存失败')
+  } finally {
+    savingHdhive.value = false
+  }
+}
+
+const handleTestHdhive = async () => {
+  testingHdhive.value = true
+  try {
+    await checkHdhive(true)
+  } finally {
+    testingHdhive.value = false
+  }
+}
+
 const handleTestNullbr = async () => {
   testingNullbr.value = true
   try {
@@ -802,6 +923,7 @@ const handleSaveTmdb = () => {
 const fetchRuntimeSettings = async () => {
   try {
     const { data } = await settingsApi.getRuntime()
+    hdhiveForm.value.cookie = data.hdhive_cookie || ''
     nullbrForm.value.appId = data.nullbr_app_id || ''
     nullbrForm.value.apiKey = data.nullbr_api_key || ''
     nullbrForm.value.baseUrl = data.nullbr_base_url || ''
@@ -1038,7 +1160,11 @@ const handleSaveOfflineDefaultFolder = async () => {
 }
 
 onMounted(() => {
-  fetchRuntimeSettings()
+  fetchRuntimeSettings().then(() => {
+    if (String(hdhiveForm.value.cookie || '').trim()) {
+      checkHdhive(false)
+    }
+  })
   fetchCookieInfo()
   checkCookie()
   fetchRiskHealth()

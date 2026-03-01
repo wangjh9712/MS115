@@ -133,6 +133,62 @@
                 />
               </div>
             </el-tab-pane>
+
+            <el-tab-pane label="HDHive" name="hdhive">
+              <div class="resource-tools">
+                <el-button
+                  size="small"
+                  type="primary"
+                  plain
+                  :loading="hdhiveLoading"
+                  @click="handleFetchHdhivePan115"
+                >
+                  {{ hdhiveTried ? '刷新 HDHive' : '用 HDHive 获取资源' }}
+                </el-button>
+              </div>
+              <div v-loading="pan115Loading || hdhiveLoading">
+                <el-table
+                  v-if="hdhivePan115Resources.length > 0"
+                  :data="hdhivePan115Resources"
+                  stripe
+                  class="resource-table"
+                >
+                  <el-table-column label="资源名称" min-width="300" show-overflow-tooltip>
+                    <template #default="{ row }">
+                      <span class="resource-name">{{ row.title }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="画质" width="120" align="center">
+                    <template #default="{ row }">
+                      <el-tag size="small" v-if="row.quality">{{ Array.isArray(row.quality) ? row.quality.join(', ') : row.quality }}</el-tag>
+                      <span v-else class="text-muted">-</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="分辨率" width="100" align="center">
+                    <template #default="{ row }">
+                      <el-tag size="small" type="info" v-if="row.resolution">{{ Array.isArray(row.resolution) ? row.resolution.join(', ') : row.resolution }}</el-tag>
+                      <span v-else class="text-muted">-</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="大小" width="100" align="center">
+                    <template #default="{ row }">
+                      <span class="resource-size">{{ row.size || '-' }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="100" align="center" fixed="right">
+                    <template #default="{ row }">
+                      <el-button type="primary" size="small" :disabled="row.pan115_savable === false" @click="handleSaveToPan115(row)">
+                        转存
+                      </el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+                <el-empty
+                  v-else
+                  :description="hdhiveTried ? 'HDHive 暂无可用115网盘资源' : '尚未获取 HDHive 资源'"
+                />
+              </div>
+            </el-tab-pane>
           </el-tabs>
         </el-tab-pane>
 
@@ -279,6 +335,8 @@ const ed2kResources = ref([])
 const pan115Loading = ref(false)
 const pansouLoading = ref(false)
 const pansouTried = ref(false)
+const hdhiveLoading = ref(false)
+const hdhiveTried = ref(false)
 const magnetLoading = ref(false)
 const seedhubMagnetLoading = ref(false)
 const seedhubMagnetTried = ref(false)
@@ -336,6 +394,10 @@ const pansouPan115Resources = computed(() =>
   pan115Resources.value.filter((item) => item?.source_service === 'pansou')
 )
 
+const hdhivePan115Resources = computed(() =>
+  pan115Resources.value.filter((item) => item?.source_service === 'hdhive')
+)
+
 const nullbrMagnetResources = computed(() =>
   magnetResources.value.filter((item) => (item?.source_service || 'nullbr') === 'nullbr')
 )
@@ -388,6 +450,7 @@ const formatSize = (bytes) => {
 
 const getResourceSourceLabel = (service) => {
   if (service === 'pansou') return 'Pansou'
+  if (service === 'hdhive') return 'HDHive'
   if (service === 'nullbr') return 'Nullbr'
   return service || '未知'
 }
@@ -417,16 +480,19 @@ const fetchPan115 = async () => {
   if (cachedList && cachedList.length > 0) {
     pan115Resources.value = cachedList
     pansouTried.value = cachedList.some((item) => item?.source_service === 'pansou')
+    hdhiveTried.value = cachedList.some((item) => item?.source_service === 'hdhive')
     pan115Loading.value = false
   }
   pansouTried.value = false
+  hdhiveTried.value = false
   pan115Loading.value = true
 
   try {
     const { data } = await searchApi.getMoviePan115(route.params.id)
     const nullbrList = Array.isArray(data.list) ? data.list : []
     const cachedPansouList = pan115Resources.value.filter((item) => item?.source_service === 'pansou')
-    const mergedList = mergePan115Resources(nullbrList, cachedPansouList)
+    const cachedHdhiveList = pan115Resources.value.filter((item) => item?.source_service === 'hdhive')
+    const mergedList = mergePan115Resources(mergePan115Resources(nullbrList, cachedPansouList), cachedHdhiveList)
     pan115Resources.value = mergedList
     writePan115Cache(mergedList)
   } catch (error) {
@@ -455,6 +521,26 @@ const handleFetchPansouPan115 = async () => {
     console.error('Failed to fetch pansou pan115:', error)
   } finally {
     pansouLoading.value = false
+  }
+}
+
+const handleFetchHdhivePan115 = async () => {
+  if (hdhiveLoading.value) return
+  hdhiveLoading.value = true
+  hdhiveTried.value = true
+  try {
+    const { data } = await searchApi.getMoviePan115Hdhive(route.params.id)
+    const hdhiveList = Array.isArray(data.list) ? data.list : []
+    const mergedList = mergePan115Resources(pan115Resources.value, hdhiveList)
+    pan115Resources.value = mergedList
+    writePan115Cache(mergedList)
+    if (hdhiveList.length === 0) {
+      ElMessage.info('HDHive 暂未找到可用资源')
+    }
+  } catch (error) {
+    console.error('Failed to fetch hdhive pan115:', error)
+  } finally {
+    hdhiveLoading.value = false
   }
 }
 
@@ -743,6 +829,8 @@ watch(magnetSourceTab, (tab) => {
 watch(pan115SourceTab, (tab) => {
   if (tab === 'pansou' && pansouPan115Resources.value.length === 0 && !pansouLoading.value && !pansouTried.value) {
     handleFetchPansouPan115()
+  } else if (tab === 'hdhive' && hdhivePan115Resources.value.length === 0 && !hdhiveLoading.value && !hdhiveTried.value) {
+    handleFetchHdhivePan115()
   }
 })
 
@@ -753,6 +841,8 @@ watch(() => route.params.id, () => {
   pan115Resources.value = []
   pansouTried.value = false
   pansouLoading.value = false
+  hdhiveTried.value = false
+  hdhiveLoading.value = false
   seedhubMagnetTried.value = false
   seedhubMagnetLoading.value = false
   magnetResources.value = []
@@ -994,6 +1084,4 @@ onBeforeUnmount(() => {
   to { opacity: 1; transform: translateY(0); }
 }
 </style>
-
-
 
