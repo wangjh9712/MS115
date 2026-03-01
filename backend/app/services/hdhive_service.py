@@ -2,7 +2,7 @@ import asyncio
 import json
 import re
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import unquote, urlencode
 
 import httpx
 
@@ -47,33 +47,73 @@ class HDHiveService:
             return response.text
 
     @staticmethod
-    def _extract_json_like_array(raw: str, escaped_key: str) -> list[dict[str, Any]]:
-        # Next.js RSC payload is escaped in HTML scripts; this extracts and decodes one array field.
-        match = re.search(
-            rf'{escaped_key}\\":\\[(.*?)\\],\\"[A-Za-z0-9_]+\\"',
-            raw,
-            flags=re.S,
-        )
-        if not match:
-            return []
+    def _extract_bracket_payload(raw: str, token: str) -> str:
+        index = raw.find(token)
+        if index < 0:
+            return ""
+        start = raw.find("[", index)
+        if start < 0:
+            return ""
 
-        payload = f"[{match.group(1)}]"
-        payload = payload.replace('\\"', '"')
-        payload = payload.replace("\\/", "/")
-        payload = payload.replace("\\u0026", "&")
-        payload = payload.replace("\\n", "\n")
-        payload = payload.replace("\\t", "\t")
+        depth = 0
+        for pos in range(start, len(raw)):
+            char = raw[pos]
+            if char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+                if depth == 0:
+                    return raw[start:pos + 1]
+        return ""
+
+    @staticmethod
+    def _decode_json_candidates(payload: str) -> list[Any]:
+        candidates: list[str] = [payload]
+
+        normalized = payload
+        normalized = normalized.replace('\\"', '"')
+        normalized = normalized.replace("\\/", "/")
+        normalized = normalized.replace("\\u0026", "&")
+        normalized = normalized.replace("\\n", "\n")
+        normalized = normalized.replace("\\t", "\t")
+        candidates.append(normalized)
 
         try:
-            parsed = json.loads(payload)
+            unicode_escaped = bytes(payload, "utf-8").decode("unicode_escape")
+            candidates.append(unicode_escaped)
         except Exception:
-            try:
-                parsed = json.loads(bytes(payload, "utf-8").decode("unicode_escape"))
-            except Exception:
-                return []
+            pass
 
-        if isinstance(parsed, list):
-            return [item for item in parsed if isinstance(item, dict)]
+        parsed_values: list[Any] = []
+        seen: set[str] = set()
+        for item in candidates:
+            key = item[:300]
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                parsed_values.append(json.loads(item))
+            except Exception:
+                continue
+        return parsed_values
+
+    @classmethod
+    def _extract_json_like_array(cls, raw: str, field_name: str) -> list[dict[str, Any]]:
+        # Next.js app-router payload is embedded in script strings.
+        tokens = [
+            f'"{field_name}":[',
+            f'\\"{field_name}\\":[',
+        ]
+
+        for token in tokens:
+            payload = cls._extract_bracket_payload(raw, token)
+            if not payload:
+                continue
+            for parsed in cls._decode_json_candidates(payload):
+                if isinstance(parsed, list):
+                    rows = [item for item in parsed if isinstance(item, dict)]
+                    if rows:
+                        return rows
         return []
 
     @staticmethod
@@ -120,16 +160,54 @@ class HDHiveService:
         match = pattern.search(raw)
         if match:
             return match.group(1).strip()
+
+        fallback_pattern = re.compile(
+            rf'\\"slug\\":\\"([^\\"]+)\\",\\"tmdb_id\\":\\"{escaped_tmdb}\\"',
+            re.S,
+        )
+        fallback_match = fallback_pattern.search(raw)
+        if fallback_match:
+            return fallback_match.group(1).strip()
         return ""
 
     @staticmethod
-    def _extract_share_link(raw: str) -> str:
-        match = re.search(r'\\"url\\":\\"(https?://(?:115|share\.115|115cdn)[^\\"]+)\\"', raw)
-        if not match:
-            return ""
-        share_url = match.group(1).replace("\\/", "/").strip()
+    def _extract_next_redirect_share_link(raw: str) -> str:
+        patterns = [
+            r'NEXT_REDIRECT;replace;(https?://(?:115|share\.115|115cdn)[^;]+);307',
+            r'NEXT_REDIRECT;replace;(https?%3A%2F%2F(?:115|share\.115|115cdn)[^;]+);307',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, raw)
+            if not match:
+                continue
+            value = match.group(1).strip()
+            value = value.replace("\\/", "/")
+            value = value.replace("&amp;", "&")
+            value = unquote(value)
+            return value
+        return ""
+
+    @classmethod
+    def _extract_share_link(cls, raw: str) -> str:
+        patterns = [
+            r'\\"url\\":\\"(https?://(?:115|share\.115|115cdn)[^\\"]+)\\"',
+            r'"url":"(https?://(?:115|share\.115|115cdn)[^"]+)"',
+        ]
+        share_url = ""
+        for pattern in patterns:
+            match = re.search(pattern, raw)
+            if match:
+                share_url = match.group(1).replace("\\/", "/").strip()
+                break
+
+        if not share_url:
+            share_url = cls._extract_next_redirect_share_link(raw)
+            if not share_url:
+                return ""
 
         code_match = re.search(r'\\"access_code\\":\\"([A-Za-z0-9]{4})\\"', raw)
+        if not code_match:
+            code_match = re.search(r'"access_code":"([A-Za-z0-9]{4})"', raw)
         if not code_match:
             return share_url
 
@@ -143,6 +221,17 @@ class HDHiveService:
         return f"{share_url}{joiner}{urlencode({'password': access_code})}"
 
     async def _resolve_media_slug(self, tmdb_id: int, media_type: str) -> str:
+        try:
+            tmdb_route_html = await self._fetch_text(f"/tmdb/{media_type}/{int(tmdb_id)}")
+            redirect_match = re.search(
+                rf"NEXT_REDIRECT;replace;/{media_type}/([^;]+);307",
+                tmdb_route_html,
+            )
+            if redirect_match:
+                return redirect_match.group(1).strip()
+        except Exception:
+            pass
+
         home_html = await self._fetch_text("/")
         slug = self._extract_media_slug_from_home(home_html, tmdb_id, media_type)
         if slug:
@@ -167,11 +256,11 @@ class HDHiveService:
         slug = await self._resolve_media_slug(tmdb_id, media_type)
         detail_path = f"/{media_type}/{slug}" if not slug.isdigit() else f"/{media_type}/{int(tmdb_id)}"
         detail_html = await self._fetch_text(detail_path)
-        rows = self._extract_json_like_array(detail_html, escaped_key=r"\\\"115")
+        rows = self._extract_json_like_array(detail_html, field_name="115")
 
         if not rows and not slug.isdigit():
             fallback_html = await self._fetch_text(f"/{media_type}/{int(tmdb_id)}")
-            rows = self._extract_json_like_array(fallback_html, escaped_key=r"\\\"115")
+            rows = self._extract_json_like_array(fallback_html, field_name="115")
 
         if not rows:
             return []
