@@ -1582,6 +1582,34 @@ async def get_tv_pan115_with_hdhive(tmdb_id: int, page: int = Query(1, ge=1)):
     return result
 
 
+@router.get("/hdhive/115/by-keyword")
+async def get_hdhive_pan115_by_keyword(
+    keyword: str = Query(..., min_length=1, description="影视名称关键词"),
+    media_type: str = Query("movie", pattern="^(movie|tv)$", description="媒体类型"),
+):
+    normalized_keyword = str(keyword or "").strip()
+    if not normalized_keyword:
+        raise HTTPException(status_code=400, detail="关键词不能为空")
+
+    attempts: list[dict[str, Any]] = []
+    hdhive_list: list[dict] = []
+    try:
+        hdhive_list = _mark_hdhive_pan115_source(
+            await hdhive_service.get_pan115_by_keyword(normalized_keyword, media_type=media_type)
+        )
+        attempts.append({"service": "hdhive", "status": "ok", "count": len(hdhive_list)})
+    except Exception as exc:
+        attempts.append({"service": "hdhive", "status": "error", "error": str(exc)})
+
+    return {
+        "keyword": normalized_keyword,
+        "media_type": media_type,
+        "list": hdhive_list,
+        "attempts": attempts,
+        "search_service": "hdhive",
+    }
+
+
 @router.post("/hdhive/resource/unlock")
 async def unlock_hdhive_resource(payload: HDHiveUnlockRequest):
     slug = str(payload.slug or "").strip()

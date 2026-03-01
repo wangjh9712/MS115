@@ -2,7 +2,7 @@ import asyncio
 import json
 import re
 from typing import Any
-from urllib.parse import unquote, urlencode
+from urllib.parse import quote_plus, unquote, urlencode
 from time import monotonic
 
 import httpx
@@ -445,52 +445,147 @@ class HDHiveService:
         if not rows:
             return []
 
-        async def resolve_row(row: dict[str, Any], index: int) -> dict[str, Any]:
-            resource_slug = str(row.get("slug") or "").strip()
-            unlock_points = int(row.get("unlock_points") or 0)
-            share_link = ""
-            lock_meta: dict[str, Any] = {}
-            if resource_slug:
-                try:
-                    lock_meta = await self._fetch_resource_meta(resource_slug)
-                    share_link = str(lock_meta.get("full_url") or "").strip()
-                except Exception:
-                    share_link = ""
-                    lock_meta = {}
-
-            title = str(row.get("title") or "").strip() or f"HDHive 资源 #{index + 1}"
-            resource_name = (
-                str(row.get("remark") or "").strip()
-                or str(row.get("name") or "").strip()
-                or title
-            )
-            size = str(row.get("share_size") or "").strip()
-            quality = row.get("source") if isinstance(row.get("source"), list) else []
-            resolution = row.get("video_resolution") if isinstance(row.get("video_resolution"), list) else []
-            savable = bool(share_link)
-            if unlock_points > 0 and not savable:
-                savable = False
-
-            return {
-                "id": row.get("id") or resource_slug or f"hdhive-{index}",
-                "slug": resource_slug,
-                "title": title,
-                "resource_name": resource_name,
-                "size": size,
-                "quality": quality,
-                "resolution": resolution,
-                "share_link": share_link,
-                "unlock_points": unlock_points,
-                "hdhive_locked": bool(lock_meta.get("locked")),
-                "hdhive_lock_code": str(lock_meta.get("lock_code") or ""),
-                "hdhive_lock_message": str(lock_meta.get("lock_message") or ""),
-                "hdhive_resource_url": str(lock_meta.get("resource_url") or ""),
-                "source_service": "hdhive",
-                "pan115_savable": savable,
-            }
-
-        tasks = [resolve_row(row, idx) for idx, row in enumerate(rows[:30])]
+        tasks = [self._resolve_pan115_row(row, idx) for idx, row in enumerate(rows[:30])]
         return await asyncio.gather(*tasks)
+
+    async def _resolve_pan115_row(self, row: dict[str, Any], index: int) -> dict[str, Any]:
+        resource_slug = str(row.get("slug") or "").strip()
+        unlock_points = int(row.get("unlock_points") or 0)
+        share_link = ""
+        lock_meta: dict[str, Any] = {}
+        if resource_slug:
+            try:
+                lock_meta = await self._fetch_resource_meta(resource_slug)
+                share_link = str(lock_meta.get("full_url") or "").strip()
+            except Exception:
+                share_link = ""
+                lock_meta = {}
+
+        title = str(row.get("title") or "").strip() or f"HDHive 资源 #{index + 1}"
+        resource_name = (
+            str(row.get("remark") or "").strip()
+            or str(row.get("name") or "").strip()
+            or title
+        )
+        size = str(row.get("share_size") or "").strip()
+        quality = row.get("source") if isinstance(row.get("source"), list) else []
+        resolution = row.get("video_resolution") if isinstance(row.get("video_resolution"), list) else []
+        savable = bool(share_link)
+        if unlock_points > 0 and not savable:
+            savable = False
+
+        return {
+            "id": row.get("id") or resource_slug or f"hdhive-{index}",
+            "slug": resource_slug,
+            "title": title,
+            "resource_name": resource_name,
+            "size": size,
+            "quality": quality,
+            "resolution": resolution,
+            "share_link": share_link,
+            "unlock_points": unlock_points,
+            "hdhive_locked": bool(lock_meta.get("locked")),
+            "hdhive_lock_code": str(lock_meta.get("lock_code") or ""),
+            "hdhive_lock_message": str(lock_meta.get("lock_message") or ""),
+            "hdhive_resource_url": str(lock_meta.get("resource_url") or ""),
+            "source_service": "hdhive",
+            "pan115_savable": savable,
+        }
+
+    @staticmethod
+    def _normalize_keyword(text: str) -> str:
+        return re.sub(r"[\s\-_·:：,.，。!！?？/\\\\'\"`()\\[\\]]+", "", str(text or "").strip().lower())
+
+    def _search_media_candidates(self, raw: str, keyword: str, media_type: str) -> list[dict[str, Any]]:
+        rows = self._extract_json_like_array(raw, field_name="data")
+        if not rows:
+            return []
+
+        keyword_normalized = self._normalize_keyword(keyword)
+        candidates: list[tuple[int, bool, dict[str, Any]]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            slug = str(row.get("slug") or "").strip()
+            if not slug:
+                continue
+            row_media_type = str(row.get("type") or media_type).strip().lower()
+            if row_media_type and row_media_type not in {"movie", "tv"}:
+                row_media_type = media_type
+            title = str(row.get("title") or "").strip()
+            original_title = str(row.get("original_title") or "").strip()
+            merged_title = " ".join(part for part in [title, original_title] if part)
+            merged_normalized = self._normalize_keyword(merged_title)
+
+            score = 0
+            if row_media_type == media_type:
+                score += 20
+            if keyword_normalized and merged_normalized:
+                if keyword_normalized in merged_normalized:
+                    score += 120
+                elif merged_normalized in keyword_normalized:
+                    score += 80
+                elif any(part and part in merged_normalized for part in keyword_normalized.split()):
+                    score += 30
+            if title:
+                score += 5
+
+            has_keyword_hit = bool(keyword_normalized and merged_normalized and keyword_normalized in merged_normalized)
+            candidates.append((score, has_keyword_hit, row))
+
+        exact_hit_candidates = [item for item in candidates if item[1]]
+        selected_pool = exact_hit_candidates
+        if not selected_pool:
+            return []
+        selected_pool.sort(key=lambda item: item[0], reverse=True)
+        selected: list[dict[str, Any]] = []
+        seen_slugs: set[str] = set()
+        for _, _, row in selected_pool:
+            slug = str(row.get("slug") or "").strip()
+            if not slug or slug in seen_slugs:
+                continue
+            seen_slugs.add(slug)
+            selected.append(row)
+            if len(selected) >= 3:
+                break
+        return selected
+
+    async def get_pan115_by_keyword(self, keyword: str, media_type: str = "movie") -> list[dict[str, Any]]:
+        normalized_keyword = str(keyword or "").strip()
+        if not normalized_keyword:
+            return []
+
+        target_media_type = "tv" if str(media_type or "").strip().lower() == "tv" else "movie"
+        search_path = f"/{target_media_type}?keyword={quote_plus(normalized_keyword)}"
+        search_html = await self._fetch_text(search_path)
+        candidates = self._search_media_candidates(search_html, normalized_keyword, target_media_type)
+        if not candidates:
+            return []
+
+        merged: list[dict[str, Any]] = []
+        seen_key: set[str] = set()
+        for candidate in candidates:
+            slug = str(candidate.get("slug") or "").strip()
+            if not slug:
+                continue
+            detail_html = await self._fetch_text(f"/{target_media_type}/{slug}")
+            rows = self._extract_json_like_array(detail_html, field_name="115")
+            if not rows:
+                continue
+            tasks = [self._resolve_pan115_row(row, idx) for idx, row in enumerate(rows[:30])]
+            items = await asyncio.gather(*tasks)
+            media_title = str(candidate.get("title") or "").strip()
+            for item in items:
+                share_link = str(item.get("share_link") or "").strip()
+                dedupe_key = f"{str(item.get('slug') or '').strip()}|{share_link}"
+                if dedupe_key in seen_key:
+                    continue
+                seen_key.add(dedupe_key)
+                if media_title and not str(item.get("title") or "").strip():
+                    item["title"] = media_title
+                item["matched_media_title"] = media_title
+                merged.append(item)
+        return merged
 
     async def get_movie_pan115(self, tmdb_id: int) -> list[dict[str, Any]]:
         return await self._build_pan115_rows(tmdb_id, "movie")

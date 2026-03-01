@@ -562,6 +562,18 @@ const buildPansouKeywords = () => {
   return candidates
 }
 
+const buildHdhiveKeywords = () => {
+  const title = String(detail.value?.title || '').trim()
+  const originalTitle = String(detail.value?.original_title || '').trim()
+  const year = String(detail.value?.year || '').trim()
+  const candidates = []
+  if (title && year) candidates.push(`${title} ${year}`)
+  if (title) candidates.push(title)
+  if (originalTitle && originalTitle !== title && year) candidates.push(`${originalTitle} ${year}`)
+  if (originalTitle && originalTitle !== title) candidates.push(originalTitle)
+  return Array.from(new Set(candidates.filter(Boolean)))
+}
+
 const fetchPan115Nullbr = async () => {
   if (!mappedTmdbId.value) return
   pan115Loading.value = true
@@ -623,20 +635,40 @@ const fetchPansouPan115 = async () => {
 }
 
 const fetchHdhivePan115 = async () => {
-  if (!mappedTmdbId.value || hdhiveLoading.value) return
+  if (hdhiveLoading.value) return
   hdhiveLoading.value = true
   hdhiveTried.value = true
   try {
-    const response = mediaType.value === 'tv'
-      ? await searchApi.getTvPan115Hdhive(mappedTmdbId.value)
-      : await searchApi.getMoviePan115Hdhive(mappedTmdbId.value)
-    const hdhiveList = (Array.isArray(response.data?.list) ? response.data.list : [])
+    let hdhiveList = []
+    if (mappedTmdbId.value) {
+      const response = mediaType.value === 'tv'
+        ? await searchApi.getTvPan115Hdhive(mappedTmdbId.value)
+        : await searchApi.getMoviePan115Hdhive(mappedTmdbId.value)
+      hdhiveList = (Array.isArray(response.data?.list) ? response.data.list : [])
+    } else {
+      const keywords = buildHdhiveKeywords()
+      const dedup = new Map()
+      for (const keyword of keywords) {
+        const { data } = await searchApi.getHdhivePan115ByKeyword(keyword, mediaType.value)
+        const rows = Array.isArray(data?.list) ? data.list : []
+        for (const row of rows) {
+          const key = `${String(row?.slug || '')}|${String(row?.share_link || '')}`.toLowerCase()
+          if (!dedup.has(key)) {
+            dedup.set(key, row)
+          }
+        }
+        if (dedup.size >= 30) break
+      }
+      hdhiveList = Array.from(dedup.values()).slice(0, 30)
+    }
+
+    const normalizedHdhiveList = hdhiveList
       .map((item) => ({ ...item, source_service: item.source_service || 'hdhive' }))
     pan115Resources.value = mergePan115Resources(
       mergePan115Resources(nullbrPan115Resources.value, pansouPan115Resources.value),
-      hdhiveList
+      normalizedHdhiveList
     )
-    if (!hdhiveList.length) {
+    if (!normalizedHdhiveList.length) {
       ElMessage.info('HDHive 暂未找到可用资源')
     }
   } catch (error) {
@@ -761,7 +793,7 @@ const ensureActiveTabLoaded = async () => {
       return
     }
     if (pan115SourceTab.value === 'hdhive') {
-      if (hdhivePan115Resources.value.length === 0 && !hdhiveLoading.value && !hdhiveTried.value && mappedTmdbId.value) {
+      if (hdhivePan115Resources.value.length === 0 && !hdhiveLoading.value && !hdhiveTried.value) {
         await fetchHdhivePan115()
       }
       return
@@ -1174,7 +1206,7 @@ watch(pan115SourceTab, async (tab) => {
     await fetchPansouPan115()
     return
   }
-  if (tab === 'hdhive' && hdhivePan115Resources.value.length === 0 && mappedTmdbId.value && !hdhiveLoading.value && !hdhiveTried.value) {
+  if (tab === 'hdhive' && hdhivePan115Resources.value.length === 0 && !hdhiveLoading.value && !hdhiveTried.value) {
     await fetchHdhivePan115()
     return
   }

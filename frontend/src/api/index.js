@@ -61,6 +61,8 @@ export const searchApi = {
   getMoviePan115: (tmdbId, page = 1) => api.get(`/search/movie/${tmdbId}/115`, { params: { page } }),
   getMoviePan115Pansou: (tmdbId, page = 1) => api.get(`/search/movie/${tmdbId}/115/pansou`, { params: { page } }),
   getMoviePan115Hdhive: (tmdbId, page = 1) => api.get(`/search/movie/${tmdbId}/115/hdhive`, { params: { page } }),
+  getHdhivePan115ByKeyword: (keyword, mediaType = 'movie') =>
+    api.get('/search/hdhive/115/by-keyword', { params: { keyword, media_type: mediaType } }),
   unlockHdhiveResource: (slug) => api.post('/search/hdhive/resource/unlock', { slug }),
   getMovieMagnet: (tmdbId) => api.get(`/search/movie/${tmdbId}/magnet`),
   getMovieMagnetSeedhub: (tmdbId) => api.get(`/search/movie/${tmdbId}/magnet`, { params: { source: 'seedhub' } }),
