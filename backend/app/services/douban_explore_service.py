@@ -14,6 +14,7 @@ import httpx
 
 from app.services.nullbr_service import nullbr_service
 from app.services.tmdb_service import tmdb_service
+from app.utils.proxy import proxy_manager
 
 
 DOUBAN_FRODO_BASE_URL = "https://frodo.douban.com/api/v2"
@@ -25,6 +26,9 @@ TMDB_ID_NEGATIVE_CACHE_TTL_SECONDS = 60 * 10
 TMDB_BACKFILL_CONCURRENCY = 3
 TMDB_BACKFILL_MAX_ITEMS_PER_SECTION = 12
 DOUBAN_SECTION_MAX_COUNT = 50
+WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
+WIKIDATA_CACHE_TTL_SECONDS = 60 * 60 * 24
+EXTERNAL_LOOKUP_CACHE_TTL_SECONDS = 60 * 60 * 24
 
 DOUBAN_SECTION_SOURCES = [
     {
@@ -95,6 +99,8 @@ DOUBAN_SECTION_SOURCES = [
 _douban_sections_cache: dict[str, dict[str, Any]] = {}
 _tmdb_id_cache: dict[str, dict[str, Any]] = {}
 _douban_subject_tmdb_cache: dict[str, dict[str, Any]] = {}
+_douban_wikidata_cache: dict[str, dict[str, Any]] = {}
+_external_lookup_cache: dict[str, dict[str, Any]] = {}
 _tmdb_backfill_inflight: set[str] = set()
 
 _douban_user_agents = [
@@ -263,6 +269,14 @@ def _build_subject_tmdb_cache_key(douban_id: str, media_type: str) -> str:
     return f"{media_type}|{str(douban_id or '').strip()}"
 
 
+def _build_external_lookup_cache_key(external_source: str, external_id: str, media_type: str) -> str:
+    return f"{media_type}|{external_source.strip().lower()}|{external_id.strip().lower()}"
+
+
+def _build_wikidata_cache_key(douban_id: str) -> str:
+    return str(douban_id or "").strip()
+
+
 def _build_section_cache_key(section_key: str, start: int, count: int) -> str:
     return f"{section_key}:{start}:{count}"
 
@@ -310,6 +324,44 @@ def _set_subject_tmdb_cache(cache_key: str, tmdb_id: Optional[int], ttl_seconds:
     _douban_subject_tmdb_cache[cache_key] = {
         "tmdb_id": tmdb_id,
         "expires_at": time.time() + effective_ttl,
+    }
+
+
+def _get_cached_wikidata_bridge(cache_key: str) -> tuple[bool, dict[str, Any]]:
+    cache_item = _douban_wikidata_cache.get(cache_key)
+    if not cache_item:
+        return False, {}
+    expires_at = cache_item.get("expires_at", 0.0)
+    if time.time() >= expires_at:
+        _douban_wikidata_cache.pop(cache_key, None)
+        return False, {}
+    bridge = cache_item.get("bridge")
+    return True, bridge if isinstance(bridge, dict) else {}
+
+
+def _set_cached_wikidata_bridge(cache_key: str, bridge: dict[str, Any]) -> None:
+    _douban_wikidata_cache[cache_key] = {
+        "bridge": bridge if isinstance(bridge, dict) else {},
+        "expires_at": time.time() + WIKIDATA_CACHE_TTL_SECONDS,
+    }
+
+
+def _get_cached_external_lookup(cache_key: str) -> tuple[bool, Optional[int]]:
+    cache_item = _external_lookup_cache.get(cache_key)
+    if not cache_item:
+        return False, None
+    expires_at = cache_item.get("expires_at", 0.0)
+    if time.time() >= expires_at:
+        _external_lookup_cache.pop(cache_key, None)
+        return False, None
+    return True, cache_item.get("tmdb_id")
+
+
+def _set_cached_external_lookup(cache_key: str, tmdb_id: Optional[int]) -> None:
+    _external_lookup_cache[cache_key] = {
+        "tmdb_id": tmdb_id,
+        "expires_at": time.time()
+        + (EXTERNAL_LOOKUP_CACHE_TTL_SECONDS if tmdb_id else TMDB_ID_NEGATIVE_CACHE_TTL_SECONDS),
     }
 
 
@@ -437,7 +489,7 @@ def _score_candidate(
         meta["reject_reason"] = "media_type_mismatch"
         return 0.0, meta
 
-    if best_similarity < 0.88:
+    if best_similarity < 0.84:
         meta["accepted"] = False
         meta["reject_reason"] = "low_title_similarity"
         return 0.0, meta
@@ -519,19 +571,260 @@ def _pick_best_tmdb_match(
 
     best = accepted[0]
     best_score = float(best.get("score") or 0.0)
-    min_score = 0.92 if year else 0.8
+    min_score = 0.86 if year else 0.76
     if best_score < min_score:
         return None, scored[:5]
 
     if len(accepted) > 1:
         second_score = float(accepted[1].get("score") or 0.0)
-        if best_score - second_score < 0.03:
+        if best_score - second_score < 0.02:
             best_vote = float(accepted[0].get("vote_average") or 0.0)
             second_vote = float(accepted[1].get("vote_average") or 0.0)
-            if best_vote - second_vote < 0.3:
-                return None, scored[:5]
+            if best_vote - second_vote < 0.2:
+                best["selection_note"] = "auto_selected_with_conflict"
 
     return best, scored[:5]
+
+
+def _extract_qid_from_uri(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    match = re.search(r"/(Q[1-9]\d*)$", text)
+    return match.group(1) if match else text
+
+
+def _normalize_external_id(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _extract_external_ids_from_subject_payload(payload: dict[str, Any]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    if not isinstance(payload, dict):
+        return result
+
+    imdb_id = _normalize_external_id(payload.get("imdb"))
+    if not imdb_id:
+        imdb_id = _normalize_external_id(payload.get("imdb_id"))
+    if not imdb_id:
+        for key in ("info_url", "url", "uri"):
+            raw = str(payload.get(key) or "")
+            match = re.search(r"tt\d{7,10}", raw)
+            if match:
+                imdb_id = match.group(0)
+                break
+    if imdb_id:
+        result["imdb_id"] = imdb_id
+
+    tvdb_id = _normalize_external_id(payload.get("tvdb_id"))
+    if tvdb_id:
+        result["tvdb_id"] = tvdb_id
+
+    wikidata_id = _normalize_external_id(payload.get("wikidata_id"))
+    if not wikidata_id:
+        for node in payload.get("aka") or []:
+            text = str(node or "")
+            match = re.search(r"\bQ[1-9]\d*\b", text)
+            if match:
+                wikidata_id = match.group(0)
+                break
+    if wikidata_id:
+        result["wikidata_id"] = wikidata_id
+    return result
+
+
+def _merge_external_ids(*sources: Optional[dict[str, Any]]) -> dict[str, str]:
+    merged: dict[str, str] = {}
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in ("imdb_id", "tvdb_id", "wikidata_id"):
+            value = _normalize_external_id(source.get(key))
+            if value:
+                merged[key] = value
+    return merged
+
+
+async def _query_wikidata_bridge(douban_id: str) -> dict[str, str]:
+    normalized_id = str(douban_id or "").strip()
+    if not normalized_id:
+        return {}
+
+    cache_key = _build_wikidata_cache_key(normalized_id)
+    cache_hit, cached_bridge = _get_cached_wikidata_bridge(cache_key)
+    if cache_hit:
+        return {
+            "qid": _normalize_external_id(cached_bridge.get("qid")),
+            "tmdb_movie_id": _normalize_external_id(cached_bridge.get("tmdb_movie_id")),
+            "tmdb_tv_id": _normalize_external_id(cached_bridge.get("tmdb_tv_id")),
+            "imdb_id": _normalize_external_id(cached_bridge.get("imdb_id")),
+            "tvdb_id": _normalize_external_id(cached_bridge.get("tvdb_id")),
+        }
+
+    query = f"""
+SELECT ?item ?tmdbMovie ?tmdbTv ?imdb ?tvdb WHERE {{
+  ?item wdt:P4529 "{normalized_id}" .
+  OPTIONAL {{ ?item wdt:P4947 ?tmdbMovie . }}
+  OPTIONAL {{ ?item wdt:P4983 ?tmdbTv . }}
+  OPTIONAL {{ ?item wdt:P345 ?imdb . }}
+  OPTIONAL {{ ?item wdt:P4835 ?tvdb . }}
+}}
+LIMIT 1
+""".strip()
+    bridge = {"qid": "", "tmdb_movie_id": "", "tmdb_tv_id": "", "imdb_id": "", "tvdb_id": ""}
+    client = proxy_manager.create_httpx_client(timeout=15.0)
+    try:
+        response = await client.get(
+            WIKIDATA_SPARQL_URL,
+            params={"query": query, "format": "json"},
+            headers={"Accept": "application/sparql-results+json"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        bindings = (((payload or {}).get("results") or {}).get("bindings") or [])
+        if isinstance(bindings, list) and bindings:
+            row = bindings[0]
+            if isinstance(row, dict):
+                bridge = {
+                    "qid": _extract_qid_from_uri(((row.get("item") or {}).get("value"))),
+                    "tmdb_movie_id": _normalize_external_id(((row.get("tmdbMovie") or {}).get("value"))),
+                    "tmdb_tv_id": _normalize_external_id(((row.get("tmdbTv") or {}).get("value"))),
+                    "imdb_id": _normalize_external_id(((row.get("imdb") or {}).get("value"))),
+                    "tvdb_id": _normalize_external_id(((row.get("tvdb") or {}).get("value"))),
+                }
+    except Exception:
+        bridge = {"qid": "", "tmdb_movie_id": "", "tmdb_tv_id": "", "imdb_id": "", "tvdb_id": ""}
+    finally:
+        await client.aclose()
+
+    _set_cached_wikidata_bridge(cache_key, bridge)
+    return bridge
+
+
+async def _verify_tmdb_external_ids(
+    tmdb_id: int,
+    media_type: str,
+    external_ids: dict[str, str],
+) -> bool:
+    if not external_ids:
+        return True
+    try:
+        if media_type == "tv":
+            payload = await tmdb_service.get_tv_external_ids(tmdb_id)
+        else:
+            payload = await tmdb_service.get_movie_external_ids(tmdb_id)
+    except Exception:
+        return True
+
+    imdb_id = _normalize_external_id(payload.get("imdb_id"))
+    tvdb_value = payload.get("tvdb_id")
+    tvdb_id = str(tvdb_value).strip() if tvdb_value is not None else ""
+    wikidata_id = _normalize_external_id(payload.get("wikidata_id"))
+    if not wikidata_id:
+        wikidata_id = _normalize_external_id(payload.get("wikidataID"))
+
+    checks = []
+    if external_ids.get("imdb_id"):
+        checks.append(imdb_id and imdb_id.lower() == external_ids["imdb_id"].lower())
+    if external_ids.get("tvdb_id"):
+        checks.append(tvdb_id and tvdb_id.lower() == external_ids["tvdb_id"].lower())
+    if external_ids.get("wikidata_id"):
+        checks.append(wikidata_id and wikidata_id.lower() == external_ids["wikidata_id"].lower())
+
+    if not checks:
+        return True
+    return any(checks)
+
+
+def _pick_first_tmdb_from_find(payload: dict[str, Any], media_type: str) -> Optional[int]:
+    rows = payload.get("items") or payload.get("results") or []
+    if not isinstance(rows, list):
+        return None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("media_type") or "").strip().lower() != media_type:
+            continue
+        tmdb_id = _extract_result_tmdb_id(row)
+        if tmdb_id:
+            return tmdb_id
+    return None
+
+
+async def _resolve_tmdb_id_by_external_ids(
+    media_type: str,
+    external_ids: dict[str, str],
+) -> tuple[Optional[int], Optional[str], dict[str, Any]]:
+    normalized_type = "tv" if media_type == "tv" else "movie"
+    source_order = ["imdb_id", "tvdb_id", "wikidata_id"] if normalized_type == "tv" else ["imdb_id", "wikidata_id"]
+    for source in source_order:
+        value = _normalize_external_id(external_ids.get(source))
+        if not value:
+            continue
+        cache_key = _build_external_lookup_cache_key(source, value, normalized_type)
+        cache_hit, cached_tmdb_id = _get_cached_external_lookup(cache_key)
+        if cache_hit:
+            if cached_tmdb_id:
+                return (
+                    int(cached_tmdb_id),
+                    "matched_by_tmdb_find_external",
+                    {"external_source": source, "external_id": value, "cache_hit": True},
+                )
+            continue
+
+        try:
+            found = await tmdb_service.find_by_external_id(value, source)
+            tmdb_id = _pick_first_tmdb_from_find(found, normalized_type)
+        except Exception:
+            _set_cached_external_lookup(cache_key, None)
+            continue
+
+        if not tmdb_id:
+            _set_cached_external_lookup(cache_key, None)
+            continue
+
+        verify_ok = await _verify_tmdb_external_ids(tmdb_id, normalized_type, external_ids)
+        if not verify_ok:
+            _set_cached_external_lookup(cache_key, None)
+            continue
+
+        _set_cached_external_lookup(cache_key, tmdb_id)
+        return (
+            int(tmdb_id),
+            "matched_by_tmdb_find_external",
+            {
+                "external_source": source,
+                "external_id": value,
+                "cache_hit": False,
+                "verified": True,
+            },
+        )
+
+    return None, None, {}
+
+
+async def _resolve_tmdb_id_by_wikidata(
+    douban_id: str,
+    media_type: str,
+) -> tuple[Optional[int], dict[str, Any]]:
+    bridge = await _query_wikidata_bridge(douban_id)
+    normalized_type = "tv" if media_type == "tv" else "movie"
+    source_tmdb_id = bridge.get("tmdb_tv_id") if normalized_type == "tv" else bridge.get("tmdb_movie_id")
+    if source_tmdb_id:
+        try:
+            resolved = int(source_tmdb_id)
+            return (
+                resolved,
+                {
+                    "wikidata_qid": bridge.get("qid"),
+                    "external_source": "wikidata_direct",
+                    "external_id": source_tmdb_id,
+                },
+            )
+        except Exception:
+            pass
+
+    return None, {"wikidata_qid": bridge.get("qid")}
 
 
 def _resolve_tmdb_id_by_nullbr(title: str, media_type: str, year: Optional[str]) -> Optional[int]:
@@ -581,18 +874,37 @@ async def _resolve_tmdb_id_by_tmdb_with_status(
         return None, False
 
     normalized_rows: list[dict[str, Any]] = []
+    typed_rows: list[dict[str, Any]] = []
     success_count = 0
+    year_int: Optional[int] = None
+    if year:
+        try:
+            year_int = int(year)
+        except Exception:
+            year_int = None
     for query in title_variants:
         try:
-            result = await tmdb_service.search_multi(query, 1)
+            result = await tmdb_service.search_by_media_type(query, media_type, page=1, year=year_int)
             success_count += 1
         except Exception:
-            continue
+            result = None
 
-        items = result.get("items") or result.get("results") or []
-        if not isinstance(items, list):
-            continue
-        normalized_rows.extend([row for row in items if isinstance(row, dict)])
+        if isinstance(result, dict):
+            items = result.get("items") or result.get("results") or []
+            if isinstance(items, list):
+                typed_rows.extend([row for row in items if isinstance(row, dict)])
+
+        try:
+            multi = await tmdb_service.search_multi(query, 1)
+            success_count += 1
+        except Exception:
+            multi = None
+        if isinstance(multi, dict):
+            items = multi.get("items") or multi.get("results") or []
+            if isinstance(items, list):
+                normalized_rows.extend([row for row in items if isinstance(row, dict)])
+
+    normalized_rows = typed_rows + normalized_rows
 
     tmdb_failed = success_count == 0
     if not normalized_rows:
@@ -631,6 +943,7 @@ async def resolve_douban_explore_item(
     year: Optional[str],
     tmdb_id: Optional[int] = None,
     alternative_titles: Optional[list[str]] = None,
+    external_ids: Optional[dict[str, str]] = None,
 ) -> dict[str, Any]:
     normalized_type = "tv" if media_type == "tv" else "movie"
     normalized_douban_id = str(douban_id or "").strip()
@@ -674,6 +987,7 @@ async def resolve_douban_explore_item(
             "tmdb_id": tmdb_value,
             "confidence": 1.0,
             "reason": "provided_tmdb_id",
+            "evidence": {"source": "provided_tmdb_id"},
             "candidates": [],
         }
 
@@ -688,9 +1002,64 @@ async def resolve_douban_explore_item(
                     "tmdb_id": int(cached_tmdb_id),
                     "confidence": 0.99,
                     "reason": "subject_cache_hit",
+                    "evidence": {"source": "subject_cache_hit"},
                     "candidates": [],
                 }
             had_negative_subject_cache = True
+
+    wikidata_bridge: dict[str, str] = {}
+    if normalized_douban_id:
+        try:
+            wikidata_bridge = await _query_wikidata_bridge(normalized_douban_id)
+        except Exception:
+            wikidata_bridge = {}
+
+    merged_external_ids = _merge_external_ids(external_ids, wikidata_bridge)
+    wikidata_qid = _normalize_external_id(wikidata_bridge.get("qid"))
+    if wikidata_qid and not merged_external_ids.get("wikidata_id"):
+        merged_external_ids["wikidata_id"] = wikidata_qid
+
+    if normalized_douban_id:
+        wikidata_tmdb_id, wikidata_evidence = await _resolve_tmdb_id_by_wikidata(normalized_douban_id, normalized_type)
+        if wikidata_tmdb_id:
+            verify_ok = await _verify_tmdb_external_ids(wikidata_tmdb_id, normalized_type, merged_external_ids)
+            if verify_ok:
+                title_cache_key = _build_tmdb_cache_key(normalized_title, year, normalized_type)
+                _set_tmdb_id_cache(title_cache_key, wikidata_tmdb_id)
+                subject_cache_key = _build_subject_tmdb_cache_key(normalized_douban_id, normalized_type)
+                _set_subject_tmdb_cache(subject_cache_key, wikidata_tmdb_id)
+                return {
+                    "resolved": True,
+                    "media_type": normalized_type,
+                    "tmdb_id": int(wikidata_tmdb_id),
+                    "confidence": 1.0,
+                    "reason": "matched_by_wikidata",
+                    "evidence": {
+                        **wikidata_evidence,
+                        "verified": True,
+                    },
+                    "candidates": [],
+                }
+
+    external_tmdb_id, external_reason, external_evidence = await _resolve_tmdb_id_by_external_ids(
+        normalized_type,
+        merged_external_ids,
+    )
+    if external_tmdb_id:
+        title_cache_key = _build_tmdb_cache_key(normalized_title, year, normalized_type)
+        _set_tmdb_id_cache(title_cache_key, external_tmdb_id)
+        if normalized_douban_id:
+            subject_cache_key = _build_subject_tmdb_cache_key(normalized_douban_id, normalized_type)
+            _set_subject_tmdb_cache(subject_cache_key, external_tmdb_id)
+        return {
+            "resolved": True,
+            "media_type": normalized_type,
+            "tmdb_id": int(external_tmdb_id),
+            "confidence": 0.98,
+            "reason": external_reason or "matched_by_tmdb_find_external",
+            "evidence": external_evidence,
+            "candidates": [],
+        }
 
     if not all_title_variants:
         return {
@@ -699,6 +1068,7 @@ async def resolve_douban_explore_item(
             "tmdb_id": None,
             "confidence": 0.0,
             "reason": "missing_title",
+            "evidence": {"external_ids": merged_external_ids},
             "candidates": [],
         }
 
@@ -744,6 +1114,10 @@ async def resolve_douban_explore_item(
                 "tmdb_id": tmdb_value,
                 "confidence": float(best.get("score") or 0.0),
                 "reason": "matched_by_nullbr",
+                "evidence": {
+                    "source": "nullbr",
+                    "selection_note": best.get("selection_note"),
+                },
                 "candidates": candidates,
             }
 
@@ -768,7 +1142,8 @@ async def resolve_douban_explore_item(
             "media_type": normalized_type,
             "tmdb_id": tmdb_value,
             "confidence": 0.93,
-            "reason": "matched_by_tmdb_fallback",
+            "reason": "matched_by_tmdb_typed_search",
+            "evidence": {"source": "tmdb_search"},
             "candidates": candidates,
         }
 
@@ -789,6 +1164,10 @@ async def resolve_douban_explore_item(
         "tmdb_id": None,
         "confidence": 0.0,
         "reason": reason,
+        "evidence": {
+            "wikidata_qid": wikidata_qid,
+            "external_ids": merged_external_ids,
+        },
         "candidates": candidates,
     }
 
@@ -1070,6 +1449,7 @@ async def fetch_douban_subject_detail(
                 casts.append(name.strip())
 
     source_url = _build_douban_web_subject_url(normalized_id, normalized_type)
+    external_id_map = _extract_external_ids_from_subject_payload(payload)
 
     resolved = await resolve_douban_explore_item(
         douban_id=normalized_id,
@@ -1078,6 +1458,7 @@ async def fetch_douban_subject_detail(
         year=year,
         tmdb_id=None,
         alternative_titles=[original_title, *aliases],
+        external_ids=external_id_map,
     )
     resolved_tmdb_id = resolved.get("tmdb_id")
     tmdb_id = int(resolved_tmdb_id) if isinstance(resolved_tmdb_id, int) and resolved_tmdb_id > 0 else None
@@ -1100,6 +1481,7 @@ async def fetch_douban_subject_detail(
             "tmdb_id": tmdb_id,
             "reason": resolved.get("reason"),
             "confidence": float(resolved.get("confidence") or 0.0),
+            "evidence": resolved.get("evidence") or {},
         },
     }
 
