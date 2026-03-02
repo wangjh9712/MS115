@@ -158,17 +158,68 @@ class TgService:
         expired_tokens: list[str] = []
         async with self._qr_lock:
             for token, item in self._qr_pending.items():
+                expires_at: datetime = item.get("expires_at") or now
                 created_at: datetime = item.get("created_at") or now
-                if (now - created_at).total_seconds() > 240:
+                state = str(item.get("state") or "pending")
+                terminal_ttl_seconds = 600
+                if now >= expires_at or (state != "pending" and (now - created_at).total_seconds() > terminal_ttl_seconds):
                     expired_tokens.append(token)
             expired_items = [self._qr_pending.pop(token, None) for token in expired_tokens]
         for item in expired_items:
             if not item:
                 continue
+            task = item.get("task")
+            if task and not task.done():
+                task.cancel()
             client = item.get("client")
             try:
                 if client:
                     await client.disconnect()
+            except Exception:
+                pass
+
+    async def _await_qr_login(self, token: str) -> None:
+        async with self._qr_lock:
+            item = self._qr_pending.get(token)
+        if not item:
+            return
+        qr_login = item.get("qr_login")
+        client = item.get("client")
+        if not qr_login or not client:
+            async with self._qr_lock:
+                self._qr_pending.pop(token, None)
+            return
+        try:
+            user = await qr_login.wait(timeout=240)
+            final_session = str(client.session.save() or "").strip()
+            if final_session:
+                self._session = final_session
+            async with self._qr_lock:
+                current = self._qr_pending.get(token)
+                if current:
+                    current["state"] = "authorized"
+                    current["session"] = final_session
+                    current["user"] = self._serialize_user(user)
+                    current["message"] = "扫码登录成功"
+        except SessionPasswordNeededError:
+            temp_session = str(client.session.save() or "").strip()
+            async with self._qr_lock:
+                current = self._qr_pending.get(token)
+                if current:
+                    current["state"] = "need_password"
+                    current["session"] = temp_session
+                    current["message"] = "账号开启了二步验证，请输入密码"
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            async with self._qr_lock:
+                current = self._qr_pending.get(token)
+                if current:
+                    current["state"] = "failed"
+                    current["message"] = str(exc)
+        finally:
+            try:
+                await client.disconnect()
             except Exception:
                 pass
 
@@ -371,7 +422,14 @@ class TgService:
                     "qr_login": qr_login,
                     "created_at": datetime.now(timezone.utc),
                     "expires_at": expires_at,
+                    "state": "pending",
+                    "session": "",
+                    "user": None,
+                    "message": "等待扫码确认",
+                    "task": None,
                 }
+                task = asyncio.create_task(self._await_qr_login(token))
+                self._qr_pending[token]["task"] = task
             return {
                 "token": token,
                 "url": str(getattr(qr_login, "url", "") or ""),
@@ -396,62 +454,36 @@ class TgService:
             item = self._qr_pending.get(normalized)
         if not item:
             raise RuntimeError("二维码会话不存在或已过期，请重新生成")
-
-        qr_login = item.get("qr_login")
-        client = item.get("client")
-        if not qr_login or not client:
-            raise RuntimeError("二维码会话无效，请重新生成")
-
-        should_cleanup = False
-        try:
-            if await client.is_user_authorized():
-                user = await client.get_me()
-                final_session = client.session.save()
-                self._session = str(final_session or "").strip()
-                should_cleanup = True
-                return {
-                    "authorized": True,
-                    "need_password": False,
-                    "session": self._session,
-                    "user": self._serialize_user(user),
-                }
-            user = await asyncio.wait_for(qr_login.wait(), timeout=0.2)
-            final_session = client.session.save()
-            self._session = str(final_session or "").strip()
-            should_cleanup = True
+        state = str(item.get("state") or "pending")
+        if state == "authorized":
+            session = str(item.get("session") or "").strip()
+            if session:
+                self._session = session
+            async with self._qr_lock:
+                self._qr_pending.pop(normalized, None)
             return {
                 "authorized": True,
                 "need_password": False,
-                "session": self._session,
-                "user": self._serialize_user(user),
+                "session": session,
+                "user": item.get("user"),
+                "message": str(item.get("message") or "扫码登录成功"),
             }
-        except asyncio.TimeoutError:
-            return {
-                "authorized": False,
-                "need_password": False,
-                "pending": True,
-                "message": "等待扫码确认",
-            }
-        except SessionPasswordNeededError:
-            temp_session = str(client.session.save() or "").strip()
-            should_cleanup = True
+        if state == "need_password":
             return {
                 "authorized": False,
                 "need_password": True,
                 "pending": False,
-                "session": temp_session,
-                "message": "账号开启了二步验证，请输入密码",
+                "session": str(item.get("session") or ""),
+                "message": str(item.get("message") or "账号开启了二步验证，请输入密码"),
             }
-        finally:
-            if item.get("expires_at") and datetime.now(timezone.utc) >= item["expires_at"]:
-                should_cleanup = True
-            if should_cleanup:
-                async with self._qr_lock:
-                    self._qr_pending.pop(normalized, None)
-                try:
-                    await client.disconnect()
-                except Exception:
-                    pass
+        if state == "failed":
+            raise RuntimeError(str(item.get("message") or "二维码登录失败"))
+        return {
+            "authorized": False,
+            "need_password": False,
+            "pending": True,
+            "message": str(item.get("message") or "等待扫码确认"),
+        }
 
     async def logout(self) -> None:
         self._ensure_login_config()
@@ -460,6 +492,9 @@ class TgService:
             pending_items = list(self._qr_pending.values())
             self._qr_pending.clear()
         for item in pending_items:
+            task = item.get("task")
+            if task and not task.done():
+                task.cancel()
             client = item.get("client")
             try:
                 if client:
