@@ -289,6 +289,14 @@
                 <img :src="tgQrState.imageDataUrl" alt="Telegram Login QR" />
               </div>
             </el-form-item>
+            <el-form-item v-if="tgQrState.statusText" label="二维码状态">
+              <el-tag
+                :type="tgQrState.statusType"
+                effect="plain"
+              >
+                {{ tgQrState.statusText }}
+              </el-tag>
+            </el-form-item>
           </el-form>
 
           <el-form label-width="120px">
@@ -720,6 +728,8 @@ const tgQrState = reactive({
   url: '',
   expiresAt: '',
   imageDataUrl: '',
+  statusText: '',
+  statusType: 'info',
   active: false
 })
 
@@ -1418,6 +1428,8 @@ const ensureTgLoginBaseConfig = async () => {
 
 const pollTgQrStatus = async (token) => {
   pollingTgQr.value = true
+  tgQrState.statusText = '等待扫码确认'
+  tgQrState.statusType = 'info'
   while (tgQrState.active && tgQrState.token === token) {
     try {
       const { data } = await settingsApi.tgCheckQrLogin(token)
@@ -1428,6 +1440,8 @@ const pollTgQrStatus = async (token) => {
         tgQrState.url = ''
         tgQrState.expiresAt = ''
         tgQrState.imageDataUrl = ''
+        tgQrState.statusText = '已授权，登录成功'
+        tgQrState.statusType = 'success'
         await settingsApi.updateRuntime({
           tg_phone: tgForm.value.phone,
           tg_session: tgForm.value.session
@@ -1441,15 +1455,23 @@ const pollTgQrStatus = async (token) => {
         tgLoginForm.value.needPassword = true
         tgLoginForm.value.tempSession = data.session || ''
         stopTgQrPolling()
+        tgQrState.statusText = '需要二步验证密码'
+        tgQrState.statusType = 'warning'
         ElMessage.info('账号开启了二步验证，请输入密码')
         break
       }
       if (!data.pending) {
         stopTgQrPolling()
+        tgQrState.statusText = data.message || '二维码状态未知，请重试'
+        tgQrState.statusType = 'warning'
         break
       }
+      tgQrState.statusText = data.message || '等待扫码确认'
+      tgQrState.statusType = 'info'
     } catch (error) {
       stopTgQrPolling()
+      tgQrState.statusText = error.response?.data?.detail || '二维码状态检测失败'
+      tgQrState.statusType = 'danger'
       ElMessage.error(error.response?.data?.detail || '二维码登录状态检测失败')
       break
     }
@@ -1468,6 +1490,8 @@ const handleStartTgQrLogin = async () => {
     tgQrState.url = data.url || ''
     tgQrState.expiresAt = data.expires_at || ''
     tgQrState.imageDataUrl = data.qr_image_data_url || data.qr_image_url || ''
+    tgQrState.statusText = '二维码已生成，等待扫码确认'
+    tgQrState.statusType = 'info'
     tgQrState.active = true
     ElMessage.success('二维码登录链接已生成，请在 Telegram 中确认登录')
     pollTgQrStatus(tgQrState.token)
@@ -1522,6 +1546,8 @@ const handleTgLogout = async () => {
     tgQrState.url = ''
     tgQrState.expiresAt = ''
     tgQrState.imageDataUrl = ''
+    tgQrState.statusText = ''
+    tgQrState.statusType = 'info'
     await checkTg(false)
     await refreshSourceConnectionStatus()
     ElMessage.success('Telegram 已退出登录')
