@@ -52,7 +52,7 @@
               <div v-loading="pan115Loading">
                 <el-table 
                   v-if="nullbrPan115Resources.length > 0" 
-                  :data="nullbrPan115Resources" 
+                  :data="pagedNullbrPan115Resources" 
                   stripe
                   class="resource-table"
                 >
@@ -92,6 +92,16 @@
                     </template>
                   </el-table-column>
                 </el-table>
+                <div v-if="nullbrPan115Resources.length > pan115PageSize" class="table-pagination">
+                  <el-pagination
+                    background
+                    layout="prev, pager, next"
+                    :total="nullbrPan115Resources.length"
+                    :page-size="pan115PageSize"
+                    :current-page="pan115Pager.nullbr"
+                    @current-change="(page) => (pan115Pager.nullbr = page)"
+                  />
+                </div>
                 <el-empty v-else description="Nullbr 暂无115网盘资源" />
               </div>
             </el-tab-pane>
@@ -111,7 +121,7 @@
               <div v-loading="pan115Loading || pansouLoading">
                 <el-table 
                   v-if="pansouPan115Resources.length > 0" 
-                  :data="pansouPan115Resources" 
+                  :data="pagedPansouPan115Resources" 
                   stripe
                   class="resource-table"
                 >
@@ -158,6 +168,16 @@
                     </template>
                   </el-table-column>
                 </el-table>
+                <div v-if="pansouPan115Resources.length > pan115PageSize" class="table-pagination">
+                  <el-pagination
+                    background
+                    layout="prev, pager, next"
+                    :total="pansouPan115Resources.length"
+                    :page-size="pan115PageSize"
+                    :current-page="pan115Pager.pansou"
+                    @current-change="(page) => (pan115Pager.pansou = page)"
+                  />
+                </div>
                 <el-empty
                   v-else
                   :description="pansouTried ? '暂无可用115网盘资源' : '尚未获取 Pansou 资源'"
@@ -180,7 +200,7 @@
               <div v-loading="pan115Loading || hdhiveLoading">
                 <el-table
                   v-if="hdhivePan115Resources.length > 0"
-                  :data="hdhivePan115Resources"
+                  :data="pagedHdhivePan115Resources"
                   stripe
                   class="resource-table"
                 >
@@ -238,6 +258,16 @@
                     </template>
                   </el-table-column>
                 </el-table>
+                <div v-if="hdhivePan115Resources.length > pan115PageSize" class="table-pagination">
+                  <el-pagination
+                    background
+                    layout="prev, pager, next"
+                    :total="hdhivePan115Resources.length"
+                    :page-size="pan115PageSize"
+                    :current-page="pan115Pager.hdhive"
+                    @current-change="(page) => (pan115Pager.hdhive = page)"
+                  />
+                </div>
                 <el-empty
                   v-else
                   :description="hdhiveTried ? 'HDHive 暂无可用115网盘资源' : '尚未获取 HDHive 资源'"
@@ -260,7 +290,7 @@
               <div v-loading="pan115Loading || tgLoading">
                 <el-table
                   v-if="tgPan115Resources.length > 0"
-                  :data="tgPan115Resources"
+                  :data="pagedTgPan115Resources"
                   stripe
                   class="resource-table"
                 >
@@ -290,6 +320,16 @@
                     </template>
                   </el-table-column>
                 </el-table>
+                <div v-if="tgPan115Resources.length > pan115PageSize" class="table-pagination">
+                  <el-pagination
+                    background
+                    layout="prev, pager, next"
+                    :total="tgPan115Resources.length"
+                    :page-size="pan115PageSize"
+                    :current-page="pan115Pager.tg"
+                    @current-change="(page) => (pan115Pager.tg = page)"
+                  />
+                </div>
                 <el-empty
                   v-else
                   :description="tgTried ? 'Telegram 暂无可用115网盘资源' : '尚未获取 Telegram 资源'"
@@ -589,6 +629,22 @@ const hdhivePan115Resources = computed(() =>
 const tgPan115Resources = computed(() =>
   pan115Resources.value.filter((item) => item?.source_service === 'tg')
 )
+const pan115PageSize = 20
+const pan115Pager = ref({
+  nullbr: 1,
+  pansou: 1,
+  hdhive: 1,
+  tg: 1
+})
+const slicePan115Page = (list, page) => {
+  const currentPage = Math.max(1, Number(page || 1))
+  const start = (currentPage - 1) * pan115PageSize
+  return list.slice(start, start + pan115PageSize)
+}
+const pagedNullbrPan115Resources = computed(() => slicePan115Page(nullbrPan115Resources.value, pan115Pager.value.nullbr))
+const pagedPansouPan115Resources = computed(() => slicePan115Page(pansouPan115Resources.value, pan115Pager.value.pansou))
+const pagedHdhivePan115Resources = computed(() => slicePan115Page(hdhivePan115Resources.value, pan115Pager.value.hdhive))
+const pagedTgPan115Resources = computed(() => slicePan115Page(tgPan115Resources.value, pan115Pager.value.tg))
 
 const nullbrMagnetResources = computed(() =>
   magnetResources.value.filter((item) => (item?.source_service || 'nullbr') === 'nullbr')
@@ -1335,6 +1391,10 @@ watch(magnetSourceTab, (tab) => {
 })
 
 watch(pan115SourceTab, (tab) => {
+  if (tab === 'nullbr') pan115Pager.value.nullbr = 1
+  if (tab === 'pansou') pan115Pager.value.pansou = 1
+  if (tab === 'hdhive') pan115Pager.value.hdhive = 1
+  if (tab === 'tg') pan115Pager.value.tg = 1
   if (tab === 'pansou' && pansouPan115Resources.value.length === 0 && !pansouLoading.value && !pansouTried.value) {
     handleFetchPansouPan115()
   } else if (tab === 'hdhive' && hdhivePan115Resources.value.length === 0 && !hdhiveLoading.value && !hdhiveTried.value) {
@@ -1349,6 +1409,7 @@ watch(() => route.params.id, () => {
   pan115SourceTab.value = 'nullbr'
   magnetSourceTab.value = 'nullbr'
   pan115Resources.value = []
+  pan115Pager.value = { nullbr: 1, pansou: 1, hdhive: 1, tg: 1 }
   pansouTried.value = false
   pansouLoading.value = false
   hdhiveTried.value = false
@@ -1580,6 +1641,12 @@ onBeforeUnmount(() => {
     :deep(.el-table__empty-block) {
       background: rgba(17, 37, 72, 0.34);
     }
+  }
+
+  .table-pagination {
+    margin-top: 12px;
+    display: flex;
+    justify-content: flex-end;
   }
 
   .resource-name {
