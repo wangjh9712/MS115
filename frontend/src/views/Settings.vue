@@ -284,6 +284,11 @@
             <el-form-item v-if="tgQrState.url" label="登录链接">
               <el-input :model-value="tgQrState.url" readonly />
             </el-form-item>
+            <el-form-item v-if="tgQrState.imageDataUrl" label="登录二维码">
+              <div class="tg-qr-preview">
+                <img :src="tgQrState.imageDataUrl" alt="Telegram Login QR" />
+              </div>
+            </el-form-item>
           </el-form>
 
           <el-form label-width="120px">
@@ -714,6 +719,7 @@ const tgQrState = reactive({
   token: '',
   url: '',
   expiresAt: '',
+  imageDataUrl: '',
   active: false
 })
 
@@ -1421,6 +1427,7 @@ const pollTgQrStatus = async (token) => {
         tgQrState.token = ''
         tgQrState.url = ''
         tgQrState.expiresAt = ''
+        tgQrState.imageDataUrl = ''
         await settingsApi.updateRuntime({
           tg_phone: tgForm.value.phone,
           tg_session: tgForm.value.session
@@ -1460,6 +1467,7 @@ const handleStartTgQrLogin = async () => {
     tgQrState.token = data.token || ''
     tgQrState.url = data.url || ''
     tgQrState.expiresAt = data.expires_at || ''
+    tgQrState.imageDataUrl = data.qr_image_data_url || data.qr_image_url || ''
     tgQrState.active = true
     ElMessage.success('二维码登录链接已生成，请在 Telegram 中确认登录')
     pollTgQrStatus(tgQrState.token)
@@ -1510,6 +1518,10 @@ const handleTgLogout = async () => {
       password: '',
       needPassword: false
     }
+    tgQrState.token = ''
+    tgQrState.url = ''
+    tgQrState.expiresAt = ''
+    tgQrState.imageDataUrl = ''
     await checkTg(false)
     await refreshSourceConnectionStatus()
     ElMessage.success('Telegram 已退出登录')
@@ -1941,6 +1953,21 @@ onBeforeUnmount(() => {
 
     .tg-link {
       margin-left: 12px;
+    }
+
+    .tg-qr-preview {
+      width: 220px;
+      height: 220px;
+      border: 1px solid var(--ms-border-light, #d8e2ef);
+      border-radius: 8px;
+      padding: 8px;
+      background: #fff;
+
+      img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      }
     }
 
     .user-info {

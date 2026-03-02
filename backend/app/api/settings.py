@@ -1,5 +1,8 @@
 import asyncio
+import base64
+import io
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -9,6 +12,14 @@ from app.services.nullbr_service import nullbr_service
 from app.services.runtime_settings_service import runtime_settings_service
 from app.services.subscription_scheduler_service import subscription_scheduler_service
 from app.services.tg_service import tg_service
+
+try:
+    import qrcode
+
+    QRCODE_AVAILABLE = True
+except Exception:
+    qrcode = None  # type: ignore[assignment]
+    QRCODE_AVAILABLE = False
 
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -72,6 +83,29 @@ class TgQrStatusRequest(BaseModel):
 
 class TgImportSessionRequest(BaseModel):
     session: str
+
+
+def _build_qr_image_data_url(content: str) -> str:
+    if not QRCODE_AVAILABLE:
+        return ""
+    value = str(content or "").strip()
+    if not value:
+        return ""
+    try:
+        image = qrcode.make(value)
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+        return f"data:image/png;base64,{encoded}"
+    except Exception:
+        return ""
+
+
+def _build_qr_image_url(content: str) -> str:
+    value = str(content or "").strip()
+    if not value:
+        return ""
+    return f"https://api.qrserver.com/v1/create-qr-code/?size=320x320&data={quote(value, safe='')}"
 
 
 def _normalize_subscription_priority(raw: object) -> list[str]:
@@ -312,10 +346,14 @@ async def verify_tg_login_password(payload: TgVerifyPasswordRequest):
 async def start_tg_qr_login():
     try:
         result = await tg_service.start_qr_login()
+        qr_url = str(result.get("url") or "")
+        qr_image_data_url = _build_qr_image_data_url(qr_url)
         return {
             "success": True,
             "token": result.get("token"),
-            "url": result.get("url"),
+            "url": qr_url,
+            "qr_image_data_url": qr_image_data_url,
+            "qr_image_url": "" if qr_image_data_url else _build_qr_image_url(qr_url),
             "expires_at": result.get("expires_at"),
             "expire_seconds": result.get("expire_seconds"),
         }
