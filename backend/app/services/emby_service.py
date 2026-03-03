@@ -1,5 +1,5 @@
 import httpx
-from typing import Set, Tuple
+from typing import Any, Set, Tuple
 from app.core.config import settings
 
 class EmbyService:
@@ -7,13 +7,22 @@ class EmbyService:
         self.base_url = settings.EMBY_URL.rstrip('/')
         self.api_key = settings.EMBY_API_KEY
 
-    async def get_downloaded_episodes(self, tmdb_id: int) -> Set[Tuple[int, int]]:
+    async def get_downloaded_episodes_with_status(self, tmdb_id: int) -> dict[str, Any]:
         """
         获取 Emby 中已存在的某个剧集的具体集数
-        返回格式: {(season_num, episode_num), ...}
+        返回格式:
+        {
+          "status": "ok|not_configured|request_failed",
+          "message": "...",
+          "episodes": {(season_num, episode_num), ...}
+        }
         """
         if not self.base_url or not self.api_key:
-            return set()
+            return {
+                "status": "not_configured",
+                "message": "Emby 未配置",
+                "episodes": set(),
+            }
 
         url = f"{self.base_url}/emby/Items"
         params = {
@@ -40,11 +49,22 @@ class EmbyService:
                         # Emby中如果是特别篇等，可能没有正常的season，我们默认给季号为1如果缺失
                         season = season_num if season_num is not None else 1
                         existing_episodes.add((int(season), int(episode_num)))
-                        
-                return existing_episodes
+                return {
+                    "status": "ok",
+                    "message": "查询成功",
+                    "episodes": existing_episodes,
+                }
             except Exception as e:
                 print(f"Error fetching from Emby: {e}")
-                return set()
+                return {
+                    "status": "request_failed",
+                    "message": str(e),
+                    "episodes": set(),
+                }
+
+    async def get_downloaded_episodes(self, tmdb_id: int) -> Set[Tuple[int, int]]:
+        result = await self.get_downloaded_episodes_with_status(tmdb_id)
+        return set(result.get("episodes") or set())
     
     async def refresh_library(self):
         """触发 Emby 扫描库更新"""

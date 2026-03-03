@@ -25,6 +25,8 @@ from app.services.pan115_service import Pan115Service
 from app.services.pansou_service import pansou_service
 from app.services.runtime_settings_service import runtime_settings_service
 from app.services.tg_service import tg_service
+from app.services.tv_missing_service import tv_missing_service
+from app.utils.name_parser import name_parser
 
 
 class SubscriptionService:
@@ -1179,6 +1181,58 @@ class SubscriptionService:
         saved = 0
         failed = 0
         errors: list[dict[str, Any]] = []
+        target_folder_id = ""
+        tv_missing_enabled = False
+        missing_episodes: set[tuple[int, int]] = set()
+        is_tv_subscription = sub.media_type == MediaType.TV and sub.tmdb_id is not None
+
+        if is_tv_subscription:
+            await self._create_step_log(
+                db,
+                run_id=run_id,
+                channel=channel,
+                subscription_id=sub.id,
+                subscription_title=sub.title,
+                step="tv_missing_fetch_start",
+                status="info",
+                message="开始查询 Emby 缺集状态",
+                payload={"tmdb_id": sub.tmdb_id},
+            )
+            tv_missing_result = await tv_missing_service.get_tv_missing_status(sub.tmdb_id, include_specials=False)
+            if str(tv_missing_result.get("status") or "") == "ok":
+                tv_missing_enabled = True
+                missing_episodes = {
+                    (int(pair[0]), int(pair[1]))
+                    for pair in (tv_missing_result.get("missing_episodes") or [])
+                    if isinstance(pair, (list, tuple)) and len(pair) == 2
+                }
+                await self._create_step_log(
+                    db,
+                    run_id=run_id,
+                    channel=channel,
+                    subscription_id=sub.id,
+                    subscription_title=sub.title,
+                    step="tv_missing_fetch_done",
+                    status="success",
+                    message="缺集状态查询完成",
+                    payload={
+                        "aired_count": int((tv_missing_result.get("counts") or {}).get("aired") or 0),
+                        "existing_count": int((tv_missing_result.get("counts") or {}).get("existing") or 0),
+                        "missing_count": len(missing_episodes),
+                    },
+                )
+            else:
+                await self._create_step_log(
+                    db,
+                    run_id=run_id,
+                    channel=channel,
+                    subscription_id=sub.id,
+                    subscription_title=sub.title,
+                    step="tv_missing_fetch_failed",
+                    status="warning",
+                    message=f"缺集状态查询失败，回退全量转存: {tv_missing_result.get('message') or 'unknown'}",
+                    payload={"status": tv_missing_result.get("status"), "message": tv_missing_result.get("message")},
+                )
 
         for record in records:
             await self._create_step_log(
@@ -1198,38 +1252,177 @@ class SubscriptionService:
             )
             try:
                 share_link, receive_code = self._split_share_link_and_receive_code(record.resource_url)
-                result = await pan_service.save_share_to_folder(
-                    share_url=share_link,
-                    folder_name=target_folder_name,
-                    parent_id=parent_folder_id,
-                    receive_code=receive_code,
-                )
-                record.status = MediaStatus.COMPLETED
-                record.completed_at = datetime.utcnow()
-                folder_id = str((result or {}).get("folder_id") or "").strip()
-                if folder_id:
-                    record.file_id = folder_id
-                saved += 1
-                await self._create_step_log(
-                    db,
-                    run_id=run_id,
-                    channel=channel,
-                    subscription_id=sub.id,
-                    subscription_title=sub.title,
-                    step="auto_transfer_item_done",
-                    status="success",
-                    message=f"[{source}] 转存成功：{record.resource_name}",
-                    payload={
-                        "source": source,
-                        "record_id": record.id,
-                        "folder_id": record.file_id,
-                    },
-                )
+                if tv_missing_enabled and is_tv_subscription:
+                    share_code = pan_service._extract_share_code(share_link)
+                    if not share_code:
+                        raise ValueError("无效的分享链接，无法提取分享码")
+
+                    all_files = await pan_service.get_share_all_files_recursive(share_code, receive_code)
+                    matched_fids: list[str] = []
+                    matched_pairs: set[tuple[int, int]] = set()
+                    unmatched_video_fids: list[str] = []
+                    parsed_count = 0
+
+                    for item in all_files:
+                        if not isinstance(item, dict):
+                            continue
+                        fid = str(item.get("fid") or "").strip()
+                        filename = str(item.get("name") or "").strip()
+                        if not fid or not filename:
+                            continue
+                        parsed = name_parser.parse_episode(filename)
+                        if parsed:
+                            parsed_count += 1
+                            pair = (int(parsed[0]), int(parsed[1]))
+                            if pair in missing_episodes:
+                                matched_fids.append(fid)
+                                matched_pairs.add(pair)
+                            continue
+                        if self._is_video_filename(filename):
+                            unmatched_video_fids.append(fid)
+
+                    await self._create_step_log(
+                        db,
+                        run_id=run_id,
+                        channel=channel,
+                        subscription_id=sub.id,
+                        subscription_title=sub.title,
+                        step="tv_record_files_parsed",
+                        status="info",
+                        message=f"[{source}] 文件解析完成：{record.resource_name}",
+                        payload={
+                            "record_id": record.id,
+                            "total_files": len(all_files),
+                            "parsed_count": parsed_count,
+                            "matched_missing_count": len(matched_fids),
+                            "unparsed_video_count": len(unmatched_video_fids),
+                            "remaining_missing_count": len(missing_episodes),
+                        },
+                    )
+
+                    selected_file_ids = list(dict.fromkeys(matched_fids))
+                    selected_mode = "missing"
+                    if not selected_file_ids and unmatched_video_fids:
+                        selected_file_ids = list(dict.fromkeys(unmatched_video_fids))
+                        selected_mode = "unparsed_fallback"
+                        await self._create_step_log(
+                            db,
+                            run_id=run_id,
+                            channel=channel,
+                            subscription_id=sub.id,
+                            subscription_title=sub.title,
+                            step="tv_record_unparsed_fallback",
+                            status="warning",
+                            message=f"[{source}] 未匹配到缺集，按保守策略转存未解析视频",
+                            payload={
+                                "record_id": record.id,
+                                "selected_count": len(selected_file_ids),
+                            },
+                        )
+
+                    if not selected_file_ids:
+                        record.status = MediaStatus.PENDING
+                        record.completed_at = None
+                        record.error_message = None
+                        await self._create_step_log(
+                            db,
+                            run_id=run_id,
+                            channel=channel,
+                            subscription_id=sub.id,
+                            subscription_title=sub.title,
+                            step="tv_record_skip_no_missing",
+                            status="info",
+                            message=f"[{source}] 缺集已补齐，跳过该资源：{record.resource_name}",
+                            payload={
+                                "record_id": record.id,
+                                "remaining_missing_count": len(missing_episodes),
+                            },
+                        )
+                        continue
+
+                    if not target_folder_id:
+                        target_folder_id = await pan_service.get_or_create_folder(parent_folder_id, target_folder_name)
+                    result = await pan_service.save_share_files(
+                        share_code=share_code,
+                        file_ids=selected_file_ids,
+                        pid=target_folder_id,
+                        receive_code=receive_code,
+                    )
+                    if not self._is_pan115_save_success(result):
+                        raise ValueError(
+                            str(
+                                (result or {}).get("error")
+                                or (result or {}).get("message")
+                                or (result or {}).get("msg")
+                                or "115转存失败"
+                            )
+                        )
+
+                    if selected_mode == "missing":
+                        for pair in matched_pairs:
+                            missing_episodes.discard(pair)
+                    record.status = MediaStatus.PENDING
+                    record.completed_at = None
+                    record.error_message = None
+                    record.file_id = str(target_folder_id or "")
+                    saved += 1
+                    await self._create_step_log(
+                        db,
+                        run_id=run_id,
+                        channel=channel,
+                        subscription_id=sub.id,
+                        subscription_title=sub.title,
+                        step="tv_transfer_selected_done",
+                        status="success",
+                        message=f"[{source}] 精准转存成功：{record.resource_name}",
+                        payload={
+                            "source": source,
+                            "record_id": record.id,
+                            "selected_mode": selected_mode,
+                            "selected_count": len(selected_file_ids),
+                            "remaining_missing_count": len(missing_episodes),
+                            "folder_id": record.file_id,
+                        },
+                    )
+                else:
+                    result = await pan_service.save_share_to_folder(
+                        share_url=share_link,
+                        folder_name=target_folder_name,
+                        parent_id=parent_folder_id,
+                        receive_code=receive_code,
+                    )
+                    record.status = MediaStatus.COMPLETED
+                    record.completed_at = datetime.utcnow()
+                    record.error_message = None
+                    folder_id = str((result or {}).get("folder_id") or "").strip()
+                    if folder_id:
+                        record.file_id = folder_id
+                    saved += 1
+                    await self._create_step_log(
+                        db,
+                        run_id=run_id,
+                        channel=channel,
+                        subscription_id=sub.id,
+                        subscription_title=sub.title,
+                        step="auto_transfer_item_done",
+                        status="success",
+                        message=f"[{source}] 转存成功：{record.resource_name}",
+                        payload={
+                            "source": source,
+                            "record_id": record.id,
+                            "folder_id": record.file_id,
+                        },
+                    )
             except Exception as exc:
                 if self._is_already_received_error(str(exc)):
                     # 115 返回已接收时视为成功，避免重复任务被统计为失败。
-                    record.status = MediaStatus.COMPLETED
-                    record.completed_at = datetime.utcnow()
+                    if tv_missing_enabled and is_tv_subscription:
+                        record.status = MediaStatus.PENDING
+                        record.completed_at = None
+                    else:
+                        record.status = MediaStatus.COMPLETED
+                        record.completed_at = datetime.utcnow()
+                    record.error_message = None
                     saved += 1
                     await self._create_step_log(
                         db,
@@ -1409,6 +1602,29 @@ class SubscriptionService:
                 break
 
         return value, receive_code
+
+    @staticmethod
+    def _is_video_filename(filename: str) -> bool:
+        value = str(filename or "").strip().lower()
+        if not value:
+            return False
+        return value.endswith((".mp4", ".mkv", ".avi", ".ts", ".rmvb", ".flv", ".mov", ".wmv", ".m4v"))
+
+    @staticmethod
+    def _is_pan115_save_success(result: Any) -> bool:
+        if isinstance(result, list):
+            return True
+        if not isinstance(result, dict):
+            return False
+        if "success" in result:
+            return bool(result.get("success"))
+        if "state" in result:
+            return bool(result.get("state"))
+        if "errNo" in result:
+            return str(result.get("errNo")) == "0"
+        if "code" in result:
+            return str(result.get("code")) in {"0", "200"}
+        return False
 
     @staticmethod
     def _is_likely_115_share_identifier(raw_link: str) -> bool:

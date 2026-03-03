@@ -2,63 +2,125 @@
   <div class="subscriptions-page">
     <div class="page-header">
       <h2>我的订阅</h2>
-      <el-radio-group v-model="filterType" @change="handleFilterChange">
-        <el-radio-button value="all">全部</el-radio-button>
-        <el-radio-button value="movie">电影</el-radio-button>
-        <el-radio-button value="tv">电视剧</el-radio-button>
-      </el-radio-group>
+      <div class="header-actions">
+        <el-radio-group v-if="activeTab === 'subscriptions'" v-model="filterType" @change="handleFilterChange">
+          <el-radio-button value="all">全部</el-radio-button>
+          <el-radio-button value="movie">电影</el-radio-button>
+          <el-radio-button value="tv">电视剧</el-radio-button>
+        </el-radio-group>
+        <template v-else>
+          <el-switch v-model="missingOnly" active-text="仅看缺集" @change="fetchTvMissingStatus" />
+          <el-button type="primary" :loading="missingLoading" @click="fetchTvMissingStatus">
+            刷新缺集状态
+          </el-button>
+        </template>
+      </div>
     </div>
 
-    <div class="subscriptions-grid" v-loading="loading">
-      <template v-if="subscriptions.length > 0">
-        <el-card v-for="sub in subscriptions" :key="sub.id" class="subscription-item">
-          <div class="card-content" @click="goToDetail(sub)">
-            <div class="poster">
-              <div
-                class="poster-skeleton"
-                :class="{ hidden: isPosterLoaded(sub), static: !hasPosterSource(sub) }"
-              />
-              <img
-                v-if="hasPosterSource(sub)"
-                class="poster-main"
-                :class="{ loaded: isPosterLoaded(sub) }"
-                :src="getPosterUrl(sub)"
-                :alt="sub.title"
-                loading="lazy"
-                decoding="async"
-                @load="handlePosterLoad(sub)"
-                @error="handlePosterError($event, sub)"
-              />
-              <div v-if="!isPosterLoaded(sub)" class="poster-placeholder-text">暂无海报</div>
-              <div class="poster-hover">
-                <el-button type="primary" size="small" @click.stop="goToDetail(sub)">快速查看详情</el-button>
+    <el-tabs v-model="activeTab" class="main-tabs">
+      <el-tab-pane label="订阅列表" name="subscriptions">
+        <div class="subscriptions-grid" v-loading="loading">
+          <template v-if="subscriptions.length > 0">
+            <el-card v-for="sub in subscriptions" :key="sub.id" class="subscription-item">
+              <div class="card-content" @click="goToDetail(sub)">
+                <div class="poster">
+                  <div
+                    class="poster-skeleton"
+                    :class="{ hidden: isPosterLoaded(sub), static: !hasPosterSource(sub) }"
+                  />
+                  <img
+                    v-if="hasPosterSource(sub)"
+                    class="poster-main"
+                    :class="{ loaded: isPosterLoaded(sub) }"
+                    :src="getPosterUrl(sub)"
+                    :alt="sub.title"
+                    loading="lazy"
+                    decoding="async"
+                    @load="handlePosterLoad(sub)"
+                    @error="handlePosterError($event, sub)"
+                  />
+                  <div v-if="!isPosterLoaded(sub)" class="poster-placeholder-text">暂无海报</div>
+                  <div class="poster-hover">
+                    <el-button type="primary" size="small" @click.stop="goToDetail(sub)">快速查看详情</el-button>
+                  </div>
+                </div>
+                <div class="info">
+                  <div class="title-row">
+                    <h3 class="title">{{ sub.title }}</h3>
+                    <el-tag :type="sub.media_type === 'movie' ? 'primary' : 'success'" size="small">
+                      {{ sub.media_type === 'movie' ? '电影' : '电视剧' }}
+                    </el-tag>
+                  </div>
+                  <div class="meta">
+                    <span v-if="sub.year">{{ sub.year }}</span>
+                    <span v-if="sub.rating">
+                      <el-icon><Star /></el-icon>
+                      {{ sub.rating?.toFixed(1) }}
+                    </span>
+                  </div>
+                  <div class="actions" @click.stop>
+                    <el-button type="danger" size="small" plain @click="handleDelete(sub)">
+                      取消订阅
+                    </el-button>
+                  </div>
+                </div>
               </div>
-            </div>
-            <div class="info">
-              <div class="title-row">
-                <h3 class="title">{{ sub.title }}</h3>
-                <el-tag :type="sub.media_type === 'movie' ? 'primary' : 'success'" size="small">
-                  {{ sub.media_type === 'movie' ? '电影' : '电视剧' }}
+            </el-card>
+          </template>
+          <el-empty v-else description="暂无订阅" />
+        </div>
+      </el-tab-pane>
+
+      <el-tab-pane label="缺集状态" name="missing">
+        <div class="missing-panel" v-loading="missingLoading">
+          <el-table v-if="missingRows.length > 0" :data="missingRows" stripe>
+            <el-table-column label="剧集" min-width="220" show-overflow-tooltip>
+              <template #default="{ row }">
+                <div class="missing-title">{{ row.title }}</div>
+                <div class="missing-year" v-if="row.year">{{ row.year }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="120" align="center">
+              <template #default="{ row }">
+                <el-tag :type="row.status === 'ok' ? 'success' : 'warning'" size="small">
+                  {{ row.status === 'ok' ? '可比对' : '异常' }}
                 </el-tag>
-              </div>
-              <div class="meta">
-                <span v-if="sub.year">{{ sub.year }}</span>
-                <span v-if="sub.rating">
-                  <el-icon><Star /></el-icon>
-                  {{ sub.rating?.toFixed(1) }}
-                </span>
-              </div>
-              <div class="actions" @click.stop>
-                <el-button type="danger" size="small" plain @click="handleDelete(sub)">
-                  取消订阅
-                </el-button>
-              </div>
-            </div>
-          </div>
-        </el-card>
-      </template>
-      <el-empty v-else description="暂无订阅" />
-    </div>
+              </template>
+            </el-table-column>
+            <el-table-column label="已播出" width="90" align="center">
+              <template #default="{ row }">{{ row.aired_count || 0 }}</template>
+            </el-table-column>
+            <el-table-column label="已入库" width="90" align="center">
+              <template #default="{ row }">{{ row.existing_count || 0 }}</template>
+            </el-table-column>
+            <el-table-column label="缺失" width="90" align="center">
+              <template #default="{ row }">
+                <el-tag :type="(row.missing_count || 0) > 0 ? 'danger' : 'success'" size="small">
+                  {{ row.missing_count || 0 }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="缺集明细" min-width="260" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span>{{ formatMissingBySeason(row.missing_by_season) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="说明" min-width="220" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span>{{ row.message || '-' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="180" align="center" fixed="right">
+              <template #default="{ row }">
+                <el-button size="small" @click="refreshMissingRow(row)">刷新</el-button>
+                <el-button size="small" type="primary" @click="goToTvDetail(row)">详情</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-empty v-else description="当前没有缺集或暂无可用数据" />
+        </div>
+      </el-tab-pane>
+    </el-tabs>
   </div>
 </template>
 
@@ -71,6 +133,10 @@ import { settingsApi, subscriptionApi } from '@/api'
 const subscriptions = ref([])
 const loading = ref(false)
 const filterType = ref('all')
+const activeTab = ref('subscriptions')
+const missingRows = ref([])
+const missingLoading = ref(false)
+const missingOnly = ref(true)
 const router = useRouter()
 
 const tmdbImageBaseUrl = ref('https://image.tmdb.org/t/p/w500')
@@ -171,6 +237,7 @@ const handleDelete = async (sub) => {
   try {
     await subscriptionApi.delete(sub.id)
     subscriptions.value = subscriptions.value.filter(s => s.id !== sub.id)
+    missingRows.value = missingRows.value.filter((row) => Number(row.subscription_id) !== Number(sub.id))
     ElMessage.success('已取消订阅')
   } catch (error) {
     ElMessage.error('操作失败')
@@ -190,8 +257,81 @@ const goToDetail = (sub) => {
   router.push(`/movie/${tmdbId}`)
 }
 
+const goToTvDetail = (row) => {
+  const tmdbId = Number(row?.tmdb_id)
+  if (!Number.isFinite(tmdbId) || tmdbId <= 0) {
+    ElMessage.warning('缺少 TMDB ID，无法跳转详情')
+    return
+  }
+  router.push(`/tv/${tmdbId}`)
+}
+
+const formatMissingBySeason = (missingBySeason) => {
+  if (!missingBySeason || typeof missingBySeason !== 'object') return '-'
+  const segments = Object.keys(missingBySeason)
+    .sort((a, b) => Number(a) - Number(b))
+    .map((season) => {
+      const episodes = Array.isArray(missingBySeason[season]) ? missingBySeason[season] : []
+      if (episodes.length === 0) return ''
+      return `S${String(season).padStart(2, '0')}: ${episodes.map(ep => `E${String(ep).padStart(2, '0')}`).join(', ')}`
+    })
+    .filter(Boolean)
+  return segments.length > 0 ? segments.join(' | ') : '-'
+}
+
+const fetchTvMissingStatus = async () => {
+  missingLoading.value = true
+  try {
+    const params = {
+      only_missing: missingOnly.value
+    }
+    const { data } = await subscriptionApi.getTvMissingStatus(params)
+    const rows = Array.isArray(data?.items) ? data.items : []
+    missingRows.value = rows
+  } catch (error) {
+    ElMessage.error('获取缺集状态失败')
+  } finally {
+    missingLoading.value = false
+  }
+}
+
+const refreshMissingRow = async (row) => {
+  const subscriptionId = Number(row?.subscription_id)
+  if (!Number.isFinite(subscriptionId) || subscriptionId <= 0) return
+  try {
+    const { data } = await subscriptionApi.getSubscriptionTvMissingStatus(subscriptionId)
+    const counts = data?.counts || {}
+    const nextRow = {
+      subscription_id: data?.subscription_id,
+      tmdb_id: data?.tmdb_id,
+      title: data?.title,
+      year: data?.year,
+      poster_path: data?.poster_path,
+      status: data?.status,
+      message: data?.message,
+      aired_count: Number(counts.aired || 0),
+      existing_count: Number(counts.existing || 0),
+      missing_count: Number(counts.missing || 0),
+      missing_by_season: data?.missing_by_season || {}
+    }
+    const index = missingRows.value.findIndex((item) => Number(item.subscription_id) === subscriptionId)
+    if (missingOnly.value && nextRow.missing_count === 0) {
+      if (index >= 0) missingRows.value.splice(index, 1)
+      return
+    }
+    if (index >= 0) {
+      missingRows.value.splice(index, 1, nextRow)
+    } else {
+      missingRows.value.unshift(nextRow)
+    }
+  } catch (error) {
+    ElMessage.error('刷新缺集状态失败')
+  }
+}
+
 onMounted(() => {
   fetchSubscriptions()
+  fetchTvMissingStatus()
 })
 </script>
 
@@ -206,6 +346,31 @@ onMounted(() => {
     h2 {
       margin: 0;
       color: var(--ms-text-primary);
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+  }
+
+  .main-tabs {
+    :deep(.el-tabs__content) {
+      padding-top: 8px;
+    }
+  }
+
+  .missing-panel {
+    .missing-title {
+      font-weight: 600;
+      color: var(--ms-text-primary);
+    }
+
+    .missing-year {
+      margin-top: 2px;
+      font-size: 12px;
+      color: var(--ms-text-muted);
     }
   }
 
@@ -353,6 +518,16 @@ onMounted(() => {
   }
 
   @media (max-width: 768px) {
+    .page-header {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 10px;
+
+      .header-actions {
+        width: 100%;
+      }
+    }
+
     .subscriptions-grid {
       grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
     }

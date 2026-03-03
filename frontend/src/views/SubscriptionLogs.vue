@@ -88,7 +88,14 @@ const stepLabelMap = {
   auto_transfer_item_start: '单条资源转存开始',
   auto_transfer_item_done: '单条资源转存成功',
   auto_transfer_item_failed: '单条资源转存失败',
-  auto_transfer_summary: '自动转存汇总'
+  auto_transfer_summary: '自动转存汇总',
+  tv_missing_fetch_start: '缺集状态查询开始',
+  tv_missing_fetch_done: '缺集状态查询完成',
+  tv_missing_fetch_failed: '缺集状态查询失败',
+  tv_record_files_parsed: '候选文件解析完成',
+  tv_record_unparsed_fallback: '未解析文件保守转存',
+  tv_record_skip_no_missing: '无缺集跳过转存',
+  tv_transfer_selected_done: '按缺集精准转存完成'
 }
 
 const getStepLabel = (step) => stepLabelMap[step] || step || '-'

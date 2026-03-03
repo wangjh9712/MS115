@@ -176,7 +176,9 @@ export const subscriptionApi = {
       }
       throw error
     }
-  }
+  },
+  getTvMissingStatus: (params) => api.get('/subscriptions/missing-status/tv', { params }),
+  getSubscriptionTvMissingStatus: (id, params) => api.get(`/subscriptions/${id}/tv/missing-status`, { params })
 }
 
 export const schedulerApi = {

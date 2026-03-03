@@ -19,6 +19,7 @@ from app.models.models import (
 from app.services.subscription_service import subscription_service
 from app.services.subscription_run_task_service import subscription_run_task_service
 from app.services.tmdb_service import tmdb_service
+from app.services.tv_missing_service import tv_missing_service
 from pydantic import BaseModel
 from typing import Any, Optional, List
 from datetime import datetime
@@ -272,6 +273,112 @@ async def get_subscription(subscription_id: int, db: AsyncSession = Depends(get_
     if not subscription:
         raise HTTPException(status_code=404, detail="Subscription not found")
     return subscription
+
+
+@router.get("/missing-status/tv")
+async def list_tv_missing_status(
+    only_missing: bool = Query(True),
+    limit: int = Query(200, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Subscription)
+        .where(
+            Subscription.media_type == MediaType.TV,
+            Subscription.is_active == True,  # noqa: E712
+        )
+        .order_by(Subscription.created_at.desc())
+        .limit(limit)
+    )
+    rows = result.scalars().all()
+
+    items: list[dict[str, Any]] = []
+    for sub in rows:
+        if sub.tmdb_id is None:
+            payload = {
+                "subscription_id": sub.id,
+                "tmdb_id": None,
+                "title": sub.title,
+                "year": sub.year,
+                "poster_path": sub.poster_path,
+                "status": "no_tmdb",
+                "message": "缺少 TMDB ID，无法进行缺集比对",
+                "aired_count": 0,
+                "existing_count": 0,
+                "missing_count": 0,
+                "missing_by_season": {},
+            }
+        else:
+            status = await tv_missing_service.get_tv_missing_status(int(sub.tmdb_id), include_specials=False)
+            counts = status.get("counts") if isinstance(status.get("counts"), dict) else {}
+            payload = {
+                "subscription_id": sub.id,
+                "tmdb_id": sub.tmdb_id,
+                "title": sub.title,
+                "year": sub.year,
+                "poster_path": sub.poster_path,
+                "status": str(status.get("status") or "unknown"),
+                "message": str(status.get("message") or ""),
+                "aired_count": int(counts.get("aired") or 0),
+                "existing_count": int(counts.get("existing") or 0),
+                "missing_count": int(counts.get("missing") or 0),
+                "missing_by_season": status.get("missing_by_season") or {},
+            }
+
+        if only_missing and int(payload.get("missing_count") or 0) == 0:
+            continue
+        items.append(payload)
+
+    return {
+        "items": items,
+        "count": len(items),
+    }
+
+
+@router.get("/{subscription_id}/tv/missing-status")
+async def get_tv_missing_status(
+    subscription_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Subscription).where(Subscription.id == subscription_id)
+    )
+    subscription = result.scalar_one_or_none()
+    if not subscription:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    if subscription.media_type != MediaType.TV:
+        raise HTTPException(status_code=400, detail="仅支持电视剧订阅")
+    if subscription.tmdb_id is None:
+        return {
+            "subscription_id": subscription.id,
+            "tmdb_id": None,
+            "title": subscription.title,
+            "year": subscription.year,
+            "poster_path": subscription.poster_path,
+            "status": "no_tmdb",
+            "message": "缺少 TMDB ID，无法进行缺集比对",
+            "aired_episodes": [],
+            "existing_episodes": [],
+            "missing_episodes": [],
+            "missing_by_season": {},
+            "counts": {"aired": 0, "existing": 0, "missing": 0},
+        }
+
+    status = await tv_missing_service.get_tv_missing_status(int(subscription.tmdb_id), include_specials=False)
+    return {
+        "subscription_id": subscription.id,
+        "tmdb_id": subscription.tmdb_id,
+        "title": subscription.title,
+        "year": subscription.year,
+        "poster_path": subscription.poster_path,
+        "status": status.get("status"),
+        "message": status.get("message"),
+        "aired_episodes": status.get("aired_episodes") or [],
+        "existing_episodes": status.get("existing_episodes") or [],
+        "missing_episodes": status.get("missing_episodes") or [],
+        "missing_by_season": status.get("missing_by_season") or {},
+        "counts": status.get("counts") or {"aired": 0, "existing": 0, "missing": 0},
+    }
 
 
 @router.put("/{subscription_id}")
