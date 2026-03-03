@@ -213,6 +213,59 @@
         </el-card>
       </el-tab-pane>
 
+      <el-tab-pane label="Emby" name="emby">
+        <el-card class="settings-card">
+          <template #header>
+            <div class="card-header">
+              <span>Emby 配置</span>
+              <el-tag v-if="embyStatus.checked" :type="embyStatus.valid ? 'success' : 'danger'" size="small">
+                {{ embyStatus.valid ? '已连接' : '未连接' }}
+              </el-tag>
+            </div>
+          </template>
+
+          <el-form :model="embyForm" label-width="120px">
+            <el-form-item label="Emby URL">
+              <el-input v-model="embyForm.url" placeholder="例如: http://127.0.0.1:8096" />
+            </el-form-item>
+            <el-form-item label="API Key">
+              <el-input
+                v-model="embyForm.apiKey"
+                type="password"
+                show-password
+                placeholder="请输入 Emby API Key"
+              />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="savingEmby" @click="handleSaveEmby">保存</el-button>
+              <el-button :loading="testingEmby" @click="handleTestEmby">测试连接</el-button>
+            </el-form-item>
+          </el-form>
+
+          <div
+            v-if="embyStatus.checked"
+            class="connection-result"
+            :class="embyStatus.valid ? 'is-success' : 'is-failed'"
+          >
+            <div class="result-title">连接检测结果</div>
+            <div class="result-message">{{ embyStatus.message }}</div>
+          </div>
+
+          <div v-if="embyStatus.valid && embyStatus.user" class="user-info">
+            <el-divider />
+            <h4>服务信息</h4>
+            <el-descriptions :column="2" border size="small">
+              <el-descriptions-item label="服务名">
+                {{ embyStatus.user.server_name || '-' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="版本">
+                {{ embyStatus.user.version || '-' }}
+              </el-descriptions-item>
+            </el-descriptions>
+          </div>
+        </el-card>
+      </el-tab-pane>
+
       <el-tab-pane label="Telegram" name="tg">
         <el-card class="settings-card">
           <template #header>
@@ -789,6 +842,10 @@ const nullbrForm = ref({
 const hdhiveForm = ref({
   cookie: ''
 })
+const embyForm = ref({
+  url: '',
+  apiKey: ''
+})
 
 const tgForm = ref({
   apiId: '',
@@ -884,7 +941,8 @@ const serviceNameMap = {
   hdhive: 'HDHive',
   tg: 'Telegram',
   tmdb: 'TMDB',
-  pansou: 'Pansou'
+  pansou: 'Pansou',
+  emby: 'Emby'
 }
 const savingProxy = ref(false)
 const testingProxy = ref(false)
@@ -898,6 +956,8 @@ const savingNullbr = ref(false)
 const testingNullbr = ref(false)
 const savingHdhive = ref(false)
 const testingHdhive = ref(false)
+const savingEmby = ref(false)
+const testingEmby = ref(false)
 const savingTg = ref(false)
 const testingTg = ref(false)
 const sendingTgCode = ref(false)
@@ -951,6 +1011,12 @@ const hdhiveStatus = reactive({
   user: null
 })
 const tgStatus = reactive({
+  checked: false,
+  valid: false,
+  message: '',
+  user: null
+})
+const embyStatus = reactive({
   checked: false,
   valid: false,
   message: '',
@@ -1422,6 +1488,63 @@ const handleTestHdhive = async () => {
   }
 }
 
+const checkEmby = async (notify = false) => {
+  try {
+    const { data } = await settingsApi.checkEmby()
+    embyStatus.checked = true
+    embyStatus.valid = !!data.valid
+    embyStatus.user = data.user || null
+    embyStatus.message = data.valid
+      ? `连接成功：${data.user?.server_name || 'Emby 服务可用'}`
+      : `连接失败：${data.message || '请检查 URL 和 API Key'}`
+    if (notify) {
+      if (data.valid) ElMessage.success(embyStatus.message)
+      else ElMessage.error(embyStatus.message)
+    }
+  } catch (error) {
+    embyStatus.checked = true
+    embyStatus.valid = false
+    embyStatus.user = null
+    embyStatus.message = error.response?.data?.detail || 'Emby 连接检测失败'
+    if (notify) ElMessage.error(embyStatus.message)
+  }
+}
+
+const handleSaveEmby = async () => {
+  if (!String(embyForm.value.url || '').trim()) {
+    ElMessage.warning('请输入 Emby URL')
+    return
+  }
+  if (!String(embyForm.value.apiKey || '').trim()) {
+    ElMessage.warning('请输入 Emby API Key')
+    return
+  }
+
+  savingEmby.value = true
+  try {
+    await settingsApi.updateRuntime({
+      emby_url: embyForm.value.url,
+      emby_api_key: embyForm.value.apiKey
+    })
+    await fetchRuntimeSettings()
+    ElMessage.success('Emby 配置已保存')
+    await checkEmby(false)
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || 'Emby 配置保存失败')
+  } finally {
+    savingEmby.value = false
+  }
+}
+
+const handleTestEmby = async () => {
+  testingEmby.value = true
+  try {
+    await checkEmby(true)
+  } finally {
+    testingEmby.value = false
+  }
+}
+
 const checkTg = async (notify = false) => {
   try {
     const { data } = await settingsApi.checkTg()
@@ -1808,6 +1931,8 @@ const fetchRuntimeSettings = async () => {
     tmdbForm.value.region = data.tmdb_region || 'CN'
     tmdbForm.value.baseUrl = data.tmdb_base_url || 'https://api.themoviedb.org/3'
     tmdbForm.value.imageBaseUrl = data.tmdb_image_base_url || 'https://image.tmdb.org/t/p/w500'
+    embyForm.value.url = data.emby_url || ''
+    embyForm.value.apiKey = data.emby_api_key || ''
 
     if (!pansouForm.value.baseUrl) {
       pansouForm.value.baseUrl = data.pansou_base_url || ''
@@ -2094,6 +2219,9 @@ onMounted(() => {
   fetchRuntimeSettings().then(() => {
     if (String(hdhiveForm.value.cookie || '').trim()) {
       checkHdhive(false)
+    }
+    if (String(embyForm.value.url || '').trim() && String(embyForm.value.apiKey || '').trim()) {
+      checkEmby(false)
     }
     if (String(tgForm.value.session || '').trim()) {
       checkTg(false)

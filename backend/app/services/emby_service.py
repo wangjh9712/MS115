@@ -7,6 +7,10 @@ class EmbyService:
         self.base_url = settings.EMBY_URL.rstrip('/')
         self.api_key = settings.EMBY_API_KEY
 
+    def set_config(self, base_url: str, api_key: str) -> None:
+        self.base_url = str(base_url or "").strip().rstrip("/")
+        self.api_key = str(api_key or "").strip()
+
     async def get_downloaded_episodes_with_status(self, tmdb_id: int) -> dict[str, Any]:
         """
         获取 Emby 中已存在的某个剧集的具体集数
@@ -80,5 +84,38 @@ class EmbyService:
                 await client.post(url, params=params, timeout=5.0)
             except Exception as e:
                 print(f"Error triggering Emby refresh: {e}")
+
+    async def check_connection(self) -> dict[str, Any]:
+        if not self.base_url or not self.api_key:
+            return {
+                "valid": False,
+                "message": "Emby URL 或 API Key 未配置",
+                "user": None,
+            }
+
+        url = f"{self.base_url}/emby/System/Info"
+        params = {"api_key": self.api_key}
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(url, params=params, timeout=10.0)
+                response.raise_for_status()
+                payload = response.json() if response.content else {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                return {
+                    "valid": True,
+                    "message": "Emby 连接成功",
+                    "user": {
+                        "server_name": payload.get("ServerName"),
+                        "version": payload.get("Version"),
+                        "id": payload.get("Id"),
+                    },
+                }
+            except Exception as exc:
+                return {
+                    "valid": False,
+                    "message": str(exc),
+                    "user": None,
+                }
 
 emby_service = EmbyService()

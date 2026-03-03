@@ -14,6 +14,7 @@ from app.services.runtime_settings_service import runtime_settings_service
 from app.services.subscription_scheduler_service import subscription_scheduler_service
 from app.services.tg_service import tg_service
 from app.services.tmdb_service import tmdb_service
+from app.services.emby_service import emby_service
 from app.utils.proxy import proxy_manager
 
 try:
@@ -48,6 +49,8 @@ class RuntimeSettingsRequest(BaseModel):
     tmdb_image_base_url: Optional[str] = None
     tmdb_language: Optional[str] = None
     tmdb_region: Optional[str] = None
+    emby_url: Optional[str] = None
+    emby_api_key: Optional[str] = None
     subscription_nullbr_enabled: Optional[bool] = None
     subscription_nullbr_interval_hours: Optional[int] = None
     subscription_nullbr_run_time: Optional[str] = None
@@ -319,6 +322,12 @@ async def check_pansou_credentials():
         }
 
 
+@router.get("/emby/check")
+async def check_emby_credentials():
+    payload = await emby_service.check_connection()
+    return payload
+
+
 @router.get("/proxy")
 async def get_proxy_config():
     """获取当前代理配置（隐藏敏感信息）"""
@@ -346,6 +355,7 @@ async def check_all_services_health():
         "tg": {"checking": True},
         "tmdb": {"checking": True},
         "pansou": {"checking": True},
+        "emby": {"checking": True},
     }
 
     # 检查 Nullbr
@@ -426,6 +436,21 @@ async def check_all_services_health():
             "valid": False,
             "message": str(exc),
             "health": None,
+        }
+
+    # 检查 Emby
+    try:
+        emby_payload = await emby_service.check_connection()
+        results["emby"] = {
+            "valid": bool(emby_payload.get("valid")),
+            "message": str(emby_payload.get("message") or ""),
+            "user": emby_payload.get("user"),
+        }
+    except Exception as exc:
+        results["emby"] = {
+            "valid": False,
+            "message": str(exc),
+            "user": None,
         }
 
     # 计算整体状态

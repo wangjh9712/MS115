@@ -125,6 +125,7 @@ export const settingsApi = {
   checkTg: () => api.get('/settings/tg/check'),
   checkTmdb: () => api.get('/settings/tmdb/check'),
   checkPansou: () => api.get('/settings/pansou/check'),
+  checkEmby: () => api.get('/settings/emby/check'),
   checkAllHealth: () => api.get('/settings/health/all'),
   getProxy: () => api.get('/settings/proxy'),
   tgSendCode: (phone) => api.post('/settings/tg/login/send-code', { phone }),

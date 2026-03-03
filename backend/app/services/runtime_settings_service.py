@@ -8,6 +8,7 @@ from app.services.hdhive_service import hdhive_service
 from app.services.nullbr_client import nullbr_client
 from app.services.pansou_service import pansou_service
 from app.services.tg_service import tg_service
+from app.services.emby_service import emby_service
 
 
 class RuntimeSettingsService:
@@ -38,6 +39,8 @@ class RuntimeSettingsService:
             "tmdb_image_base_url": settings.TMDB_IMAGE_BASE_URL,
             "tmdb_language": settings.TMDB_LANGUAGE,
             "tmdb_region": settings.TMDB_REGION,
+            "emby_url": settings.EMBY_URL or "",
+            "emby_api_key": settings.EMBY_API_KEY or "",
             "subscription_nullbr_enabled": False,
             "subscription_nullbr_interval_hours": 24,
             "subscription_nullbr_run_time": "03:00",
@@ -250,6 +253,12 @@ class RuntimeSettingsService:
     def get_tmdb_region(self) -> str:
         return self._data["tmdb_region"]
 
+    def get_emby_url(self) -> str:
+        return str(self._data.get("emby_url") or "")
+
+    def get_emby_api_key(self) -> str:
+        return str(self._data.get("emby_api_key") or "")
+
     def get_subscription_resource_priority(self) -> list[str]:
         value = self._data.get("subscription_resource_priority")
         if not isinstance(value, list):
@@ -375,6 +384,8 @@ class RuntimeSettingsService:
         settings.TMDB_IMAGE_BASE_URL = self.get_tmdb_image_base_url()
         settings.TMDB_LANGUAGE = self.get_tmdb_language()
         settings.TMDB_REGION = self.get_tmdb_region()
+        settings.EMBY_URL = self.get_emby_url()
+        settings.EMBY_API_KEY = self.get_emby_api_key()
 
         hdhive_service.set_cookie(self.get_hdhive_cookie())
         hdhive_service.set_base_url(self.get_hdhive_base_url())
@@ -393,6 +404,10 @@ class RuntimeSettingsService:
             channels=self.get_tg_channel_usernames(),
             search_days=self.get_tg_search_days(),
             max_messages=self.get_tg_max_messages_per_channel(),
+        )
+        emby_service.set_config(
+            base_url=self.get_emby_url(),
+            api_key=self.get_emby_api_key(),
         )
 
     def get_all(self) -> dict[str, Any]:
@@ -420,6 +435,8 @@ class RuntimeSettingsService:
             "tmdb_image_base_url": self.get_tmdb_image_base_url(),
             "tmdb_language": self.get_tmdb_language(),
             "tmdb_region": self.get_tmdb_region(),
+            "emby_url": self.get_emby_url(),
+            "emby_api_key": self.get_emby_api_key(),
             "subscription_nullbr_enabled": bool(self._data.get("subscription_nullbr_enabled", False)),
             "subscription_nullbr_interval_hours": int(self._data.get("subscription_nullbr_interval_hours", 24) or 24),
             "subscription_nullbr_run_time": str(self._data.get("subscription_nullbr_run_time", "03:00") or "03:00"),
