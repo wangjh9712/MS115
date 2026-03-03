@@ -1490,7 +1490,13 @@ const handleTestHdhive = async () => {
 
 const checkEmby = async (notify = false) => {
   try {
-    const { data } = await settingsApi.checkEmby()
+    const customUrl = String(embyForm.value.url || '').trim()
+    const customKey = String(embyForm.value.apiKey || '').trim()
+    const { data } = await settingsApi.checkEmby(
+      customUrl && customKey
+        ? { emby_url: customUrl, emby_api_key: customKey }
+        : undefined
+    )
     embyStatus.checked = true
     embyStatus.valid = !!data.valid
     embyStatus.user = data.user || null
@@ -1505,7 +1511,7 @@ const checkEmby = async (notify = false) => {
     embyStatus.checked = true
     embyStatus.valid = false
     embyStatus.user = null
-    embyStatus.message = error.response?.data?.detail || 'Emby 连接检测失败'
+    embyStatus.message = error.response?.data?.detail || error.message || 'Emby 连接检测失败'
     if (notify) ElMessage.error(embyStatus.message)
   }
 }
@@ -1537,6 +1543,14 @@ const handleSaveEmby = async () => {
 }
 
 const handleTestEmby = async () => {
+  if (!String(embyForm.value.url || '').trim()) {
+    ElMessage.warning('请输入 Emby URL')
+    return
+  }
+  if (!String(embyForm.value.apiKey || '').trim()) {
+    ElMessage.warning('请输入 Emby API Key')
+    return
+  }
   testingEmby.value = true
   try {
     await checkEmby(true)

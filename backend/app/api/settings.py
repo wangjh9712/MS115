@@ -323,8 +323,16 @@ async def check_pansou_credentials():
 
 
 @router.get("/emby/check")
-async def check_emby_credentials():
-    payload = await emby_service.check_connection()
+async def check_emby_credentials(
+    emby_url: Optional[str] = None,
+    emby_api_key: Optional[str] = None,
+):
+    custom_url = str(emby_url or "").strip()
+    custom_key = str(emby_api_key or "").strip()
+    if custom_url and custom_key:
+        payload = await emby_service.check_connection_with_config(custom_url, custom_key)
+    else:
+        payload = await emby_service.check_connection()
     return payload
 
 

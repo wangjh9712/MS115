@@ -85,16 +85,18 @@ class EmbyService:
             except Exception as e:
                 print(f"Error triggering Emby refresh: {e}")
 
-    async def check_connection(self) -> dict[str, Any]:
-        if not self.base_url or not self.api_key:
+    async def check_connection_with_config(self, base_url: str, api_key: str) -> dict[str, Any]:
+        normalized_base_url = str(base_url or "").strip().rstrip("/")
+        normalized_api_key = str(api_key or "").strip()
+        if not normalized_base_url or not normalized_api_key:
             return {
                 "valid": False,
                 "message": "Emby URL 或 API Key 未配置",
                 "user": None,
             }
 
-        url = f"{self.base_url}/emby/System/Info"
-        params = {"api_key": self.api_key}
+        url = f"{normalized_base_url}/emby/System/Info"
+        params = {"api_key": normalized_api_key}
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(url, params=params, timeout=10.0)
@@ -117,5 +119,14 @@ class EmbyService:
                     "message": str(exc),
                     "user": None,
                 }
+
+    async def check_connection(self) -> dict[str, Any]:
+        if not self.base_url or not self.api_key:
+            return {
+                "valid": False,
+                "message": "Emby URL 或 API Key 未配置",
+                "user": None,
+            }
+        return await self.check_connection_with_config(self.base_url, self.api_key)
 
 emby_service = EmbyService()
