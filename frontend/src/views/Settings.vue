@@ -615,6 +615,14 @@
                 <el-button size="small" :loading="checkingSourceStatus" @click="refreshSourceConnectionStatus">
                   刷新连接状态
                 </el-button>
+                <el-button
+                  size="small"
+                  type="primary"
+                  :loading="savingResourcePriority"
+                  @click="handleSaveResourcePriority"
+                >
+                  保存优先级
+                </el-button>
               </div>
               <div class="priority-tips">
                 <el-text size="small" type="info">
@@ -958,6 +966,7 @@ const pollingTgQr = ref(false)
 const importingTgSession = ref(false)
 const savingTmdb = ref(false)
 const savingScheduler = ref(false)
+const savingResourcePriority = ref(false)
 const runningNullbr = ref(false)
 const runningPansou = ref(false)
 const runningTg = ref(false)
@@ -1925,6 +1934,36 @@ const movePriority = (source, direction) => {
   resourcePriority.value = current
 }
 
+const normalizeResourcePriority = (priorityList) => {
+  const fallbackOrder = ['nullbr', 'hdhive', 'pansou', 'tg']
+  const normalized = []
+  for (const item of Array.isArray(priorityList) ? priorityList : []) {
+    const source = String(item || '').trim().toLowerCase()
+    if (!fallbackOrder.includes(source)) continue
+    if (!normalized.includes(source)) normalized.push(source)
+  }
+  for (const source of fallbackOrder) {
+    if (!normalized.includes(source)) normalized.push(source)
+  }
+  return normalized
+}
+
+const handleSaveResourcePriority = async () => {
+  savingResourcePriority.value = true
+  try {
+    const normalizedPriority = normalizeResourcePriority(resourcePriority.value)
+    await settingsApi.updateRuntime({
+      subscription_resource_priority: normalizedPriority
+    })
+    resourcePriority.value = normalizedPriority
+    ElMessage.success('资源查找优先级已保存，已应用到全局订阅转存')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '资源查找优先级保存失败')
+  } finally {
+    savingResourcePriority.value = false
+  }
+}
+
 const handleSaveScheduler = async () => {
   if (schedulerForm.value.hdhiveUnlock.enabled) {
     const maxPointsPerItem = Number(schedulerForm.value.hdhiveUnlock.maxPointsPerItem || 0)
@@ -1941,6 +1980,7 @@ const handleSaveScheduler = async () => {
 
   savingScheduler.value = true
   try {
+    const normalizedPriority = normalizeResourcePriority(resourcePriority.value)
     await settingsApi.updateRuntime({
       subscription_nullbr_enabled: schedulerForm.value.nullbr.enabled,
       subscription_nullbr_interval_hours: Number(schedulerForm.value.nullbr.intervalHours || 24),
@@ -1951,12 +1991,13 @@ const handleSaveScheduler = async () => {
       subscription_tg_enabled: schedulerForm.value.tg.enabled,
       subscription_tg_interval_hours: Number(schedulerForm.value.tg.intervalHours || 24),
       subscription_tg_run_time: schedulerForm.value.tg.runTime || '04:00',
-      subscription_resource_priority: resourcePriority.value,
+      subscription_resource_priority: normalizedPriority,
       subscription_hdhive_auto_unlock_enabled: schedulerForm.value.hdhiveUnlock.enabled,
       subscription_hdhive_unlock_max_points_per_item: Number(schedulerForm.value.hdhiveUnlock.maxPointsPerItem || 10),
       subscription_hdhive_unlock_budget_points_per_run: Number(schedulerForm.value.hdhiveUnlock.budgetPointsPerRun || 30),
       subscription_hdhive_unlock_threshold_inclusive: schedulerForm.value.hdhiveUnlock.thresholdInclusive !== false
     })
+    resourcePriority.value = normalizedPriority
     ElMessage.success('订阅任务、资源优先级与 HDHive 解锁策略已保存')
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '保存失败')
