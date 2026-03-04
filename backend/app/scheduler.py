@@ -15,6 +15,7 @@ from app.core.database import async_session_maker
 from app.models.scheduler_task import SchedulerTask
 from app.models.workflow import Workflow
 from app.services.job_registry import job_registry
+from app.services.operation_log_service import operation_log_service
 from app.services.workflow_executor import workflow_executor
 from app.services.workflow_service import WorkflowService
 
@@ -72,22 +73,64 @@ class SchedulerManager:
     async def start(self, job_id: str) -> dict[str, Any]:
         meta = self._jobs.get(job_id)
         if not meta:
+            await operation_log_service.log_background_event(
+                source_type="scheduler",
+                module="scheduler",
+                action="scheduler.job.start",
+                status="warning",
+                message=f"调度任务不存在: {job_id}",
+                trace_id=job_id,
+            )
             return {"success": False, "message": f"job not found: {job_id}"}
 
         with self._run_lock:
             if meta.get("running"):
+                await operation_log_service.log_background_event(
+                    source_type="scheduler",
+                    module="scheduler",
+                    action="scheduler.job.start",
+                    status="warning",
+                    message=f"调度任务已在运行: {job_id}",
+                    trace_id=job_id,
+                )
                 return {"success": False, "message": f"job is already running: {job_id}"}
             meta["running"] = True
+        await operation_log_service.log_background_event(
+            source_type="scheduler",
+            module="scheduler",
+            action="scheduler.job.start",
+            status="info",
+            message=f"调度任务开始执行: {job_id}",
+            trace_id=job_id,
+        )
 
         try:
             func = meta.get("func")
             kwargs = dict(meta.get("kwargs") or {})
             result = await self._run_callable(func, kwargs)
             await self._mark_job_result(job_id, True, result)
+            await operation_log_service.log_background_event(
+                source_type="scheduler",
+                module="scheduler",
+                action="scheduler.job.finish",
+                status="success",
+                message=f"调度任务执行成功: {job_id}",
+                trace_id=job_id,
+                extra={"result": result},
+            )
             return {"success": True, "result": result}
         except Exception as exc:
             logger.exception("Scheduled job failed: %s", job_id)
             await self._mark_job_result(job_id, False, str(exc))
+            await operation_log_service.log_background_event(
+                source_type="scheduler",
+                module="scheduler",
+                action="scheduler.job.finish",
+                status="failed",
+                message=f"调度任务执行失败: {job_id}",
+                trace_id=job_id,
+                extra={"error": str(exc)},
+            )
             return {"success": False, "message": str(exc)}
         finally:
             with self._run_lock:
@@ -129,6 +172,15 @@ class SchedulerManager:
         func = job_registry.get(task.job_key)
         if not func:
             logger.warning("Unknown job_key for task %s: %s", task.id, task.job_key)
+            await operation_log_service.log_background_event(
+                source_type="scheduler",
+                module="scheduler",
+                action="scheduler.job.update",
+                status="warning",
+                message=f"未知任务类型: {task.job_key}",
+                trace_id=self._dynamic_job_id(task.id),
+                extra={"task_id": task.id, "job_key": task.job_key},
+            )
             return
 
         kwargs = self._parse_json(task.kwargs_json, {})

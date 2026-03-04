@@ -4,6 +4,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.core.database import async_session_maker
+from app.services.operation_log_service import operation_log_service
 from app.services.subscription_service import subscription_service
 
 
@@ -39,6 +40,15 @@ class SubscriptionRunTaskService:
             self._tasks[task_id] = task
             self._running_by_channel[normalized_channel] = task_id
             self._prune_locked()
+        await operation_log_service.log_background_event(
+            source_type="background_task",
+            module="subscriptions",
+            action="subscription.run.background.start",
+            status="info",
+            message=f"订阅后台任务已入队: {normalized_channel}",
+            trace_id=task_id,
+            extra={"channel": normalized_channel, "force_auto_download": bool(force_auto_download)},
+        )
 
         asyncio.create_task(self._run_task(task_id, normalized_channel, bool(force_auto_download)))
         return dict(task)
@@ -57,6 +67,15 @@ class SubscriptionRunTaskService:
                 "status": "running",
                 "message": "任务执行中",
             },
+        )
+        await operation_log_service.log_background_event(
+            source_type="background_task",
+            module="subscriptions",
+            action="subscription.run.background.running",
+            status="info",
+            message=f"订阅后台任务开始执行: {channel}",
+            trace_id=task_id,
+            extra={"channel": channel, "force_auto_download": force_auto_download},
         )
 
         try:
@@ -84,6 +103,15 @@ class SubscriptionRunTaskService:
                     "finished_at": datetime.utcnow().isoformat(),
                 },
             )
+            await operation_log_service.log_background_event(
+                source_type="background_task",
+                module="subscriptions",
+                action="subscription.run.background.finish",
+                status="success",
+                message=result.get("message") or "订阅后台任务执行完成",
+                trace_id=task_id,
+                extra={"channel": channel},
+            )
         except Exception as exc:
             await self._update_task(
                 task_id,
@@ -93,6 +121,15 @@ class SubscriptionRunTaskService:
                     "error": str(exc),
                     "finished_at": datetime.utcnow().isoformat(),
                 },
+            )
+            await operation_log_service.log_background_event(
+                source_type="background_task",
+                module="subscriptions",
+                action="subscription.run.background.finish",
+                status="failed",
+                message=f"订阅后台任务执行失败: {channel}",
+                trace_id=task_id,
+                extra={"channel": channel, "error": str(exc)},
             )
         finally:
             async with self._lock:

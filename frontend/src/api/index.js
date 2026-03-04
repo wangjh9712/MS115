@@ -148,6 +148,12 @@ export const settingsApi = {
   rebuildTgIndex: () => api.post('/settings/tg/index/rebuild')
 }
 
+export const logsApi = {
+  list: (params) => api.get('/logs', { params }),
+  modules: () => api.get('/logs/modules'),
+  prune: (days = 30) => api.post('/logs/prune', null, { params: { days } })
+}
+
 export const subscriptionApi = {
   list: (params) => api.get('/subscriptions', { params }),
   get: (id) => api.get(`/subscriptions/${id}`),

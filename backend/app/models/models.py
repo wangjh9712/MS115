@@ -101,6 +101,26 @@ class SubscriptionStepLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class OperationLog(Base):
+    __tablename__ = "operation_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    trace_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    module: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True, default="info")
+    http_method: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    path: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    message: Mapped[str] = mapped_column(String(500), nullable=False)
+    request_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extra: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
 class TgMessageIndex(Base):
     __tablename__ = "tg_message_index"
     __table_args__ = (
