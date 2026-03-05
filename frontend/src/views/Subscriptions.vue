@@ -285,14 +285,33 @@ const formatMissingBySeason = (missingBySeason) => {
 const fetchTvMissingStatus = async (refresh = false) => {
   missingLoading.value = true
   try {
+    const loadTvSubscriptionIdSet = async () => {
+      const { data } = await subscriptionApi.list({
+        is_active: true,
+        exclude_transferred_success: true,
+        media_type: 'tv'
+      })
+      const rows = Array.isArray(data) ? data : []
+      return new Set(
+        rows
+          .map((item) => Number(item?.id))
+          .filter((id) => Number.isFinite(id) && id > 0)
+      )
+    }
     const params = {
       only_missing: missingOnly.value,
       limit: 120,
       refresh: refresh === true
     }
-    const { data } = await subscriptionApi.getTvMissingStatus(params)
+    const [{ data }, tvSubscriptionIdSet] = await Promise.all([
+      subscriptionApi.getTvMissingStatus(params),
+      loadTvSubscriptionIdSet()
+    ])
     const rows = Array.isArray(data?.items) ? data.items : []
-    missingRows.value = rows
+    missingRows.value = rows.filter((row) => {
+      const subscriptionId = Number(row?.subscription_id)
+      return Number.isFinite(subscriptionId) && tvSubscriptionIdSet.has(subscriptionId)
+    })
   } catch (error) {
     ElMessage.error('获取缺集状态失败')
   } finally {
@@ -304,6 +323,21 @@ const refreshMissingRow = async (row) => {
   const subscriptionId = Number(row?.subscription_id)
   if (!Number.isFinite(subscriptionId) || subscriptionId <= 0) return
   try {
+    const { data: tvSubsData } = await subscriptionApi.list({
+      is_active: true,
+      exclude_transferred_success: true,
+      media_type: 'tv'
+    })
+    const tvSubIdSet = new Set(
+      (Array.isArray(tvSubsData) ? tvSubsData : [])
+        .map((item) => Number(item?.id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    )
+    if (!tvSubIdSet.has(subscriptionId)) {
+      const index = missingRows.value.findIndex((item) => Number(item.subscription_id) === subscriptionId)
+      if (index >= 0) missingRows.value.splice(index, 1)
+      return
+    }
     const { data } = await subscriptionApi.getSubscriptionTvMissingStatus(subscriptionId, { refresh: true })
     const counts = data?.counts || {}
     const nextRow = {
