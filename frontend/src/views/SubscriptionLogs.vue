@@ -5,7 +5,9 @@
       <div class="filters">
         <el-select v-model="filters.channel" clearable placeholder="渠道" class="filter-item filter-item-channel">
           <el-option label="Nullbr" value="nullbr" />
+          <el-option label="HDHive" value="hdhive" />
           <el-option label="Pansou" value="pansou" />
+          <el-option label="Telegram" value="tg" />
         </el-select>
         <el-input v-model.trim="filters.runId" placeholder="Run ID" clearable class="filter-item filter-item-runid" />
         <el-input-number v-model="filters.limit" :min="20" :max="1000" :step="20" />
@@ -73,6 +75,13 @@ const stepLabelMap = {
   fetch_skip: '跳过抓取',
   fetch_nullbr_start: 'Nullbr 抓取开始',
   fetch_nullbr_done: 'Nullbr 抓取结束',
+  fetch_hdhive_tmdb_start: 'HDHive TMDB 抓取开始',
+  fetch_hdhive_tmdb_done: 'HDHive TMDB 抓取结束',
+  fetch_hdhive_tmdb_failed: 'HDHive TMDB 抓取失败',
+  fetch_hdhive_keyword_start: 'HDHive 关键词抓取开始',
+  fetch_hdhive_keyword_done: 'HDHive 关键词抓取结束',
+  fetch_tg_keyword_start: 'Telegram 抓取开始',
+  fetch_tg_keyword_done: 'Telegram 抓取结束',
   fetch_pansou_tmdb_start: 'Pansou TMDB 抓取开始',
   fetch_pansou_tmdb_done: 'Pansou TMDB 抓取结束',
   fetch_pansou_tmdb_empty: 'Pansou TMDB 无结果',

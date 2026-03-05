@@ -13,6 +13,7 @@ class SubscriptionSchedulerService:
         settings_data = runtime_settings_service.get_all()
         channels = (
             ("nullbr", "Nullbr 订阅检查"),
+            ("hdhive", "HDHive 订阅检查"),
             ("pansou", "Pansou 订阅检查"),
             ("tg", "Telegram 订阅检查"),
         )

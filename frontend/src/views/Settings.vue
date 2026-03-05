@@ -758,6 +758,28 @@
               />
             </el-form-item>
 
+            <el-divider content-position="left">HDHive 渠道</el-divider>
+            <el-form-item label="启用任务">
+              <el-switch v-model="schedulerForm.hdhive.enabled" />
+            </el-form-item>
+            <el-form-item label="检查间隔(小时)">
+              <el-input-number
+                v-model="schedulerForm.hdhive.intervalHours"
+                :min="1"
+                :max="24"
+                :disabled="!schedulerForm.hdhive.enabled"
+              />
+            </el-form-item>
+            <el-form-item label="执行时间">
+              <el-time-picker
+                v-model="schedulerForm.hdhive.runTime"
+                format="HH:mm"
+                value-format="HH:mm"
+                placeholder="选择时间"
+                :disabled="!schedulerForm.hdhive.enabled"
+              />
+            </el-form-item>
+
             <el-divider content-position="left">Pansou 渠道</el-divider>
             <el-form-item label="启用任务">
               <el-switch v-model="schedulerForm.pansou.enabled" />
@@ -805,6 +827,7 @@
             <el-form-item>
               <el-button type="primary" :loading="savingScheduler" @click="handleSaveScheduler">保存</el-button>
               <el-button :loading="runningNullbr" :disabled="runningSubscriptionChannel !== ''" @click="handleRunSubscriptionChannel('nullbr')">立即执行 Nullbr</el-button>
+              <el-button :loading="runningHdhive" :disabled="runningSubscriptionChannel !== ''" @click="handleRunSubscriptionChannel('hdhive')">立即执行 HDHive</el-button>
               <el-button :loading="runningPansou" :disabled="runningSubscriptionChannel !== ''" @click="handleRunSubscriptionChannel('pansou')">立即执行 Pansou</el-button>
               <el-button :loading="runningTg" :disabled="runningSubscriptionChannel !== ''" @click="handleRunSubscriptionChannel('tg')">立即执行 Telegram</el-button>
             </el-form-item>
@@ -970,6 +993,11 @@ const schedulerForm = ref({
     intervalHours: 24,
     runTime: '03:00'
   },
+  hdhive: {
+    enabled: false,
+    intervalHours: 24,
+    runTime: '03:15'
+  },
   pansou: {
     enabled: false,
     intervalHours: 24,
@@ -1056,6 +1084,7 @@ const savingTmdb = ref(false)
 const savingScheduler = ref(false)
 const savingResourcePriority = ref(false)
 const runningNullbr = ref(false)
+const runningHdhive = ref(false)
 const runningPansou = ref(false)
 const runningTg = ref(false)
 const runningSubscriptionChannel = ref('')
@@ -2215,6 +2244,9 @@ const fetchRuntimeSettings = async () => {
     schedulerForm.value.nullbr.enabled = !!data.subscription_nullbr_enabled
     schedulerForm.value.nullbr.intervalHours = Number(data.subscription_nullbr_interval_hours || 24)
     schedulerForm.value.nullbr.runTime = data.subscription_nullbr_run_time || '03:00'
+    schedulerForm.value.hdhive.enabled = !!data.subscription_hdhive_enabled
+    schedulerForm.value.hdhive.intervalHours = Number(data.subscription_hdhive_interval_hours || 24)
+    schedulerForm.value.hdhive.runTime = data.subscription_hdhive_run_time || '03:15'
 
     schedulerForm.value.pansou.enabled = !!data.subscription_pansou_enabled
     schedulerForm.value.pansou.intervalHours = Number(data.subscription_pansou_interval_hours || 24)
@@ -2306,6 +2338,9 @@ const handleSaveScheduler = async () => {
       subscription_nullbr_enabled: schedulerForm.value.nullbr.enabled,
       subscription_nullbr_interval_hours: Number(schedulerForm.value.nullbr.intervalHours || 24),
       subscription_nullbr_run_time: schedulerForm.value.nullbr.runTime || '03:00',
+      subscription_hdhive_enabled: schedulerForm.value.hdhive.enabled,
+      subscription_hdhive_interval_hours: Number(schedulerForm.value.hdhive.intervalHours || 24),
+      subscription_hdhive_run_time: schedulerForm.value.hdhive.runTime || '03:15',
       subscription_pansou_enabled: schedulerForm.value.pansou.enabled,
       subscription_pansou_interval_hours: Number(schedulerForm.value.pansou.intervalHours || 24),
       subscription_pansou_run_time: schedulerForm.value.pansou.runTime || '03:30',
@@ -2375,7 +2410,9 @@ const handleRunSubscriptionChannel = async (channel) => {
   runningTaskMessage.value = '任务已提交，等待执行...'
   const loadingRef = channel === 'nullbr'
     ? runningNullbr
-    : channel === 'pansou'
+    : channel === 'hdhive'
+      ? runningHdhive
+      : channel === 'pansou'
       ? runningPansou
       : runningTg
   loadingRef.value = true

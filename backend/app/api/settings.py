@@ -60,6 +60,9 @@ class RuntimeSettingsRequest(BaseModel):
     subscription_nullbr_enabled: Optional[bool] = None
     subscription_nullbr_interval_hours: Optional[int] = None
     subscription_nullbr_run_time: Optional[str] = None
+    subscription_hdhive_enabled: Optional[bool] = None
+    subscription_hdhive_interval_hours: Optional[int] = None
+    subscription_hdhive_run_time: Optional[str] = None
     subscription_pansou_enabled: Optional[bool] = None
     subscription_pansou_interval_hours: Optional[int] = None
     subscription_pansou_run_time: Optional[str] = None

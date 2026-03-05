@@ -14,6 +14,7 @@ class JobRegistry:
             "system.cleanup_runtime_cache": self._cleanup_runtime_cache,
             "system.noop": self._noop,
             "subscription.check_nullbr": self._check_subscription_nullbr,
+            "subscription.check_hdhive": self._check_subscription_hdhive,
             "subscription.check_pansou": self._check_subscription_pansou,
             "subscription.check_tg": self._check_subscription_tg,
         }
@@ -54,6 +55,10 @@ class JobRegistry:
     async def _check_subscription_pansou(self, **kwargs) -> dict[str, Any]:
         async with async_session_maker() as db:
             return await subscription_service.run_channel_check(db, "pansou")
+
+    async def _check_subscription_hdhive(self, **kwargs) -> dict[str, Any]:
+        async with async_session_maker() as db:
+            return await subscription_service.run_channel_check(db, "hdhive")
 
     async def _check_subscription_tg(self, **kwargs) -> dict[str, Any]:
         async with async_session_maker() as db:
