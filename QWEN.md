@@ -485,3 +485,6 @@ npm run preview                              # 预览构建
 ---
 
 *最后更新: 2025-03-05*
+
+## Qwen Added Memories
+- 每次修改代码并提交到 git 后，需要自动重启前后端服务才能生效。后端启动命令: cd /mnt/d/code/MediaSync115/backend && /mnt/d/code/MediaSync115/backend/.venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload。前端已在后台运行，通常不需要重启。

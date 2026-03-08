@@ -1017,6 +1017,10 @@ async def resolve_douban_explore_item(
     normalized_douban_id = str(douban_id or "").strip()
     normalized_title = str(title or "").strip()
     had_negative_subject_cache = False
+
+    # 提前初始化 merged_external_ids，避免早期返回时未定义
+    initial_external_ids = external_ids if isinstance(external_ids, dict) else {}
+
     all_titles: list[str] = []
     if normalized_title:
         all_titles.append(normalized_title)
@@ -1053,8 +1057,8 @@ async def resolve_douban_explore_item(
             "resolved": True,
             "media_type": normalized_type,
             "tmdb_id": tmdb_value,
-            "imdb_id": merged_external_ids.get("imdb_id"),
-            "external_ids": merged_external_ids,
+            "imdb_id": initial_external_ids.get("imdb_id"),
+            "external_ids": initial_external_ids,
             "confidence": 1.0,
             "reason": "provided_tmdb_id",
             "evidence": {"source": "provided_tmdb_id"},
@@ -1070,8 +1074,8 @@ async def resolve_douban_explore_item(
                     "resolved": True,
                     "media_type": normalized_type,
                     "tmdb_id": int(cached_tmdb_id),
-                    "imdb_id": merged_external_ids.get("imdb_id"),
-                    "external_ids": merged_external_ids,
+                    "imdb_id": initial_external_ids.get("imdb_id"),
+                    "external_ids": initial_external_ids,
                     "confidence": 0.99,
                     "reason": "subject_cache_hit",
                     "evidence": {"source": "subject_cache_hit"},
