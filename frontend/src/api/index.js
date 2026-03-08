@@ -47,6 +47,11 @@ export const searchApi = {
   getExploreSection: (source = 'douban', sectionKey, limit = 30, refresh = false, start = 0) =>
     api.get(`/search/explore/section/${sectionKey}`, { params: { source, limit, refresh, start } }),
   resolveExploreItem: (payload) => api.post('/search/explore/resolve', payload),
+  enqueueExploreSubscribeTask: (payload) => api.post('/search/explore/queue/subscribe', payload),
+  enqueueExploreSaveTask: (payload) => api.post('/search/explore/queue/save', payload),
+  getExploreQueueTask: (taskId) => api.get(`/search/explore/queue/tasks/${encodeURIComponent(taskId)}`),
+  getExploreActiveQueueTasks: (queueType = 'all') =>
+    api.get('/search/explore/queue/active', { params: { queue_type: queueType } }),
   getDoubanSubject: (doubanId, mediaType = 'movie') =>
     api.get(`/search/douban/subject/${encodeURIComponent(doubanId)}`, { params: { media_type: mediaType } }),
   getExploreDoubanSections: (limit = 24, refresh = false) =>

@@ -80,7 +80,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { searchApi, subscriptionApi, pan115Api } from '@/api'
+import { searchApi, subscriptionApi } from '@/api'
 import { Star, FolderAdd } from '@element-plus/icons-vue'
 
 const SECTION_BATCH_CACHE_TTL_MS = 5 * 60 * 1000
@@ -126,6 +126,11 @@ let batchLoadPromise = null
 const subscribedIdMap = ref(new Map())
 const subscribedDoubanIds = ref(new Set()) // 存储豆瓣ID订阅集合
 const subscribedImdbIds = ref(new Set()) // 存储IMDB ID订阅集合
+const EXPLORE_QUEUE_POLL_INTERVAL_MS = 1800
+const queueActiveSubscribeKeys = ref(new Set())
+const queueActiveSaveKeys = ref(new Set())
+let exploreQueuePollTimer = null
+let exploreQueuePolling = false
 
 const toValidTmdbId = (rawId) => {
   const id = Number(rawId)
@@ -155,6 +160,132 @@ const applySubscribedFlags = () => {
   for (const item of allItems.value) {
     applySubscribedFlag(item)
   }
+}
+
+const normalizeExploreQueueMediaType = (rawType) => {
+  return String(rawType || '').toLowerCase() === 'tv' ? 'tv' : 'movie'
+}
+
+const buildExploreQueueItemKeyFromItem = (item) => {
+  const mediaType = normalizeExploreQueueMediaType(item?.media_type)
+  const tmdbId = toValidTmdbId(item?.tmdb_id)
+  if (tmdbId) return `tmdb:${mediaType}:${tmdbId}`
+  const doubanId = String(item?.douban_id || item?.id || '').trim()
+  if (doubanId) return `douban:${mediaType}:${doubanId}`
+  return ''
+}
+
+const buildExploreQueueItemKeyFromTask = (task) => {
+  const itemKey = String(task?.item_key || '').trim()
+  if (itemKey) return itemKey
+  const mediaType = normalizeExploreQueueMediaType(task?.media_type)
+  const tmdbId = toValidTmdbId(task?.tmdb_id)
+  if (tmdbId) return `tmdb:${mediaType}:${tmdbId}`
+  const doubanId = String(task?.douban_id || '').trim()
+  if (doubanId) return `douban:${mediaType}:${doubanId}`
+  return ''
+}
+
+const buildExploreQueuePayload = (item) => {
+  const mediaType = normalizeExploreQueueMediaType(item?.media_type)
+  const tmdbId = toValidTmdbId(item?.tmdb_id)
+  const idValue = item?.id === undefined || item?.id === null ? '' : String(item.id).trim()
+  const doubanId = String(item?.douban_id || idValue || '').trim()
+  return {
+    source: exploreSource.value,
+    id: idValue || null,
+    douban_id: doubanId || null,
+    title: String(item?.title || '').trim(),
+    name: String(item?.name || item?.title || '').trim(),
+    original_title: String(item?.original_title || '').trim(),
+    original_name: String(item?.original_name || '').trim(),
+    aliases: Array.isArray(item?.aliases) ? item.aliases : [],
+    year: String(item?.year || '').trim(),
+    media_type: mediaType,
+    tmdb_id: tmdbId,
+    poster_path: String(item?.poster_path || '').trim(),
+    poster_url: String(item?.poster_url || '').trim(),
+    overview: String(item?.overview || '').trim(),
+    intro: String(item?.intro || '').trim(),
+    rating: item?.rating ?? item?.vote_average ?? null,
+    vote_average: item?.vote_average ?? item?.rating ?? null
+  }
+}
+
+const syncExploreQueueItemStates = () => {
+  for (const item of allItems.value) {
+    const itemKey = buildExploreQueueItemKeyFromItem(item)
+    item.subscribing = Boolean(itemKey) && queueActiveSubscribeKeys.value.has(itemKey)
+    item.saving = Boolean(itemKey) && queueActiveSaveKeys.value.has(itemKey)
+  }
+}
+
+const applyExploreQueueTaskSnapshot = (tasks = []) => {
+  const nextSubscribe = new Set()
+  const nextSave = new Set()
+  for (const task of tasks) {
+    if (!task || typeof task !== 'object') continue
+    const itemKey = buildExploreQueueItemKeyFromTask(task)
+    if (!itemKey) continue
+    if (task.queue_type === 'subscribe') {
+      nextSubscribe.add(itemKey)
+      continue
+    }
+    if (task.queue_type === 'save') {
+      nextSave.add(itemKey)
+    }
+  }
+  queueActiveSubscribeKeys.value = nextSubscribe
+  queueActiveSaveKeys.value = nextSave
+  syncExploreQueueItemStates()
+}
+
+const markExploreQueueTaskActive = (task) => {
+  if (!task || typeof task !== 'object') return
+  const queueType = String(task.queue_type || '').trim().toLowerCase()
+  const itemKey = buildExploreQueueItemKeyFromTask(task)
+  if (!itemKey) return
+  if (queueType === 'subscribe') {
+    queueActiveSubscribeKeys.value = new Set([...queueActiveSubscribeKeys.value, itemKey])
+  } else if (queueType === 'save') {
+    queueActiveSaveKeys.value = new Set([...queueActiveSaveKeys.value, itemKey])
+  } else {
+    return
+  }
+  syncExploreQueueItemStates()
+}
+
+const fetchExploreQueueActiveTasks = async () => {
+  if (exploreQueuePolling) return
+  exploreQueuePolling = true
+  const hadActiveSubscribeTasks = queueActiveSubscribeKeys.value.size > 0
+  try {
+    const { data } = await searchApi.getExploreActiveQueueTasks('all')
+    const tasks = Array.isArray(data?.tasks) ? data.tasks : []
+    applyExploreQueueTaskSnapshot(tasks)
+  } catch {
+    // ignore queue polling errors
+  } finally {
+    exploreQueuePolling = false
+    if (hadActiveSubscribeTasks && queueActiveSubscribeKeys.value.size === 0) {
+      await refreshSubscribedMap()
+    }
+  }
+}
+
+const stopExploreQueuePolling = () => {
+  if (exploreQueuePollTimer) {
+    clearInterval(exploreQueuePollTimer)
+    exploreQueuePollTimer = null
+  }
+}
+
+const startExploreQueuePolling = () => {
+  stopExploreQueuePolling()
+  fetchExploreQueueActiveTasks()
+  exploreQueuePollTimer = window.setInterval(() => {
+    fetchExploreQueueActiveTasks()
+  }, EXPLORE_QUEUE_POLL_INTERVAL_MS)
 }
 
 const refreshSubscribedMap = async () => {
@@ -317,16 +448,6 @@ const handleImageError = (event) => {
   event.target.src = new URL('/no-poster.png', import.meta.url).href
 }
 
-const extractPan115ShareLink = (resource) => {
-  return String(resource?.share_link || resource?.share_url || '').trim()
-}
-
-const buildMediaFolderName = (title, year) => {
-  const safeTitle = String(title || '').trim() || '未命名资源'
-  const safeYear = String(year || '').trim()
-  return safeYear ? `${safeTitle} (${safeYear})` : safeTitle
-}
-
 const getExploreItemTitle = (item) => {
   const raw = String(item?.title || item?.name || '').trim()
   return raw || '该影视'
@@ -348,31 +469,6 @@ const getResolveFailureMessage = (reason) => {
     return '缓存未命中，已尝试重新匹配，请稍后重试'
   }
   return '未能唯一匹配到 TMDB 详情，请稍后重试'
-}
-
-const getDefaultTransferFolderId = async () => {
-  try {
-    const { data } = await pan115Api.getDefaultFolder()
-    return data.folder_id || '0'
-  } catch {
-    return '0'
-  }
-}
-
-const fetchPan115ShareCandidates = async (mediaType, tmdbId) => {
-  const primaryResp = mediaType === 'tv'
-    ? await searchApi.getTvPan115(tmdbId)
-    : await searchApi.getMoviePan115(tmdbId)
-  const primaryList = Array.isArray(primaryResp.data?.list) ? primaryResp.data.list : []
-  if (primaryList.some((row) => extractPan115ShareLink(row))) {
-    return primaryList
-  }
-
-  const pansouResp = mediaType === 'tv'
-    ? await searchApi.getTvPan115Pansou(tmdbId)
-    : await searchApi.getMoviePan115Pansou(tmdbId)
-  const pansouList = Array.isArray(pansouResp.data?.list) ? pansouResp.data.list : []
-  return primaryList.concat(pansouList)
 }
 
 const resolveItemRoute = async (item) => {
@@ -453,130 +549,55 @@ const handleItemClick = async (item) => {
 }
 
 const handleExploreSubscribe = async (item) => {
-  if (!item || item.subscribing) return
-
-  const routeInfo = await resolveItemRoute(item)
-  if (!routeInfo?.tmdbId || (routeInfo.mediaType !== 'movie' && routeInfo.mediaType !== 'tv')) {
-    if (exploreSource.value === 'douban' && goToDoubanDetail(item)) {
-      ElMessage.info('已跳转豆瓣详情，可在详情页继续匹配 TMDB 后订阅')
-      return
-    }
-    ElMessage.warning(getResolveFailureMessage(routeInfo?.reason))
+  if (!item) return
+  const payload = buildExploreQueuePayload(item)
+  if (!payload.tmdb_id && !payload.douban_id && !payload.id) {
+    ElMessage.warning(withTitleHint(item, '缺少可用条目标识，无法加入订阅队列'))
     return
   }
 
+  const intent = item.isSubscribed ? 'unsubscribe' : 'subscribe'
+  const previousSubscribed = Boolean(item.isSubscribed)
+  item.isSubscribed = intent === 'subscribe'
   item.subscribing = true
   try {
-    const subscribedKey = buildSubscribedKey(routeInfo.mediaType, routeInfo.tmdbId)
-    if (item.isSubscribed) {
-      let existingId = subscribedKey ? subscribedIdMap.value.get(subscribedKey) : null
-      if (!existingId) {
-        await refreshSubscribedMap()
-        existingId = subscribedKey ? subscribedIdMap.value.get(subscribedKey) : null
-      }
-      if (!existingId) {
-        ElMessage.warning('未找到订阅记录，请刷新后重试')
-        return
-      }
-      await subscriptionApi.delete(existingId)
-      if (subscribedKey) subscribedIdMap.value.delete(subscribedKey)
-      item.isSubscribed = false
-      ElMessage.success('已取消订阅')
-      return
-    }
-
-    const title = item.title || ''
-    const year = item.year || ''
-    const subscriptionData = {
-      tmdb_id: routeInfo.tmdbId,
-      title,
-      media_type: routeInfo.mediaType,
-      poster_path: item.poster_path || item.poster_url || '',
-      overview: item.intro || '',
-      year,
-      rating: item.rating || item.vote_average || null
-    }
-
-    try {
-      const { data } = await subscriptionApi.create(subscriptionData)
-      item.isSubscribed = true
-      const createdId = Number(data?.id || 0)
-      if (subscribedKey && createdId > 0) subscribedIdMap.value.set(subscribedKey, createdId)
-      ElMessage.success('订阅成功')
-    } catch (error) {
-      if (error.response?.status === 400) {
-        await refreshSubscribedMap()
-        item.isSubscribed = Boolean(subscribedKey && subscribedIdMap.value.has(subscribedKey))
-        ElMessage.info(item.isSubscribed ? '该影视已在订阅列表中' : '订阅状态已更新，请重试')
-      } else {
-        throw error
-      }
+    const { data } = await searchApi.enqueueExploreSubscribeTask({ ...payload, intent })
+    markExploreQueueTaskActive(data)
+    const message = String(data?.message || '').trim()
+    if (message.includes('最后一次操作意图') || message.includes('已在订阅队列')) {
+      ElMessage.info(withTitleHint(item, message))
+    } else {
+      ElMessage.success(withTitleHint(item, message || '已加入订阅队列'))
     }
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || error.message || '订阅失败')
-  } finally {
     item.subscribing = false
+    item.isSubscribed = previousSubscribed
+    ElMessage.error(error.response?.data?.detail || error.message || '加入订阅队列失败')
   }
 }
 
 const handleExploreSave = async (item) => {
-  if (!item || item.saving) return
-
-  const routeInfo = await resolveItemRoute(item)
-  if (!routeInfo?.tmdbId || (routeInfo.mediaType !== 'movie' && routeInfo.mediaType !== 'tv')) {
-    if (exploreSource.value === 'douban' && goToDoubanDetail(item)) {
-      ElMessage.info(withTitleHint(item, '已跳转豆瓣详情，可直接使用豆瓣关键词 115 转存'))
-      return
-    }
-    ElMessage.warning(withTitleHint(item, getResolveFailureMessage(routeInfo?.reason)))
+  if (!item) return
+  const payload = buildExploreQueuePayload(item)
+  if (!payload.tmdb_id && !payload.douban_id && !payload.id) {
+    ElMessage.warning(withTitleHint(item, '缺少可用条目标识，无法加入转存队列'))
     return
   }
-
   item.saving = true
   try {
-    const title = item.title || ''
-    const year = item.year || ''
-    const candidates = await fetchPan115ShareCandidates(routeInfo.mediaType, routeInfo.tmdbId)
-    const targetResource = candidates.find((row) => extractPan115ShareLink(row))
-    if (!targetResource) {
-      ElMessage.warning(withTitleHint(item, '暂未找到可转存资源'))
-      return
+    const { data } = await searchApi.enqueueExploreSaveTask(payload)
+    markExploreQueueTaskActive(data)
+    const message = String(data?.message || '').trim()
+    if (message.includes('已在转存队列')) {
+      ElMessage.info(withTitleHint(item, message))
+    } else {
+      ElMessage.success(withTitleHint(item, message || '已加入转存队列'))
     }
-
-    const folderId = await getDefaultTransferFolderId()
-    const shareLink = extractPan115ShareLink(targetResource)
-    const folderName = buildMediaFolderName(title, year)
-    const { data } = await pan115Api.saveShareToFolder(
-      shareLink,
-      folderName,
-      folderId,
-      '',
-      routeInfo.mediaType === 'tv' ? routeInfo.tmdbId : null
-    )
-    const transferSuccess = data?.success === true
-      || data?.state === true
-      || data?.result?.success === true
-      || data?.result?.state === true
-    if (!transferSuccess) {
-      throw new Error(data?.message || data?.error || data?.result?.error || '转存失败')
-    }
-
-    markExploreItemSaved(item)
-    ElMessage.success(withTitleHint(item, '已提交转存任务'))
   } catch (error) {
-    const reason = error.response?.data?.detail || error.message || '转存失败'
-    ElMessage.error(withTitleHint(item, `转存失败：${reason}`))
-  } finally {
     item.saving = false
+    const reason = error.response?.data?.detail || error.message || '加入转存队列失败'
+    ElMessage.error(withTitleHint(item, reason))
   }
-}
-
-const markExploreItemSaved = (item) => {
-  if (!item) return
-  item.justSaved = true
-  window.setTimeout(() => {
-    item.justSaved = false
-  }, 1500)
 }
 
 const disconnectLoadObserver = () => {
@@ -609,16 +630,19 @@ const appendUniqueItems = (items) => {
   for (const item of items) {
     const normalizedTmdbId = toValidTmdbId(item.tmdb_id)
     const mediaType = item.media_type === 'tv' ? 'tv' : 'movie'
-    const subscribedKey = buildSubscribedKey(mediaType, normalizedTmdbId)
     const normalizedItem = {
       ...item,
       tmdb_id: normalizedTmdbId,
       media_type: mediaType,
-      isSubscribed: Boolean(subscribedKey) && subscribedIdMap.value.has(subscribedKey),
+      isSubscribed: false,
       subscribing: false,
       saving: false,
       justSaved: false
     }
+    applySubscribedFlag(normalizedItem)
+    const itemKey = buildExploreQueueItemKeyFromItem(normalizedItem)
+    normalizedItem.subscribing = Boolean(itemKey) && queueActiveSubscribeKeys.value.has(itemKey)
+    normalizedItem.saving = Boolean(itemKey) && queueActiveSaveKeys.value.has(itemKey)
     const key = `${item.id}|${item.rank}|${item.title}`
     if (exists.has(key)) continue
     exists.add(key)
@@ -777,10 +801,12 @@ watch(loadAnchorRef, () => {
 })
 
 onMounted(() => {
+  startExploreQueuePolling()
   fetchSection()
 })
 
 onBeforeUnmount(() => {
+  stopExploreQueuePolling()
   clearPrefetchTimer()
   disconnectLoadObserver()
 })

@@ -19,6 +19,7 @@ from app.services.douban_explore_service import (
     fetch_douban_section,
     resolve_douban_explore_item,
 )
+from app.services.explore_action_queue_service import explore_action_queue_service
 from app.services.hdhive_service import hdhive_service
 from app.services.nullbr_service import nullbr_service
 from app.services.pansou_service import pansou_service
@@ -97,6 +98,30 @@ _pan115_share_code_hint_pattern = re.compile(
 
 class HDHiveUnlockRequest(BaseModel):
     slug: str
+
+
+class ExploreQueueBaseRequest(BaseModel):
+    source: str = "douban"
+    id: str | int | None = None
+    douban_id: str | None = None
+    title: str = ""
+    name: str = ""
+    original_title: str = ""
+    original_name: str = ""
+    aliases: list[str] | None = None
+    year: str = ""
+    media_type: str = "movie"
+    tmdb_id: int | None = None
+    poster_path: str = ""
+    poster_url: str = ""
+    overview: str = ""
+    intro: str = ""
+    rating: float | None = None
+    vote_average: float | None = None
+
+
+class ExploreQueueSubscribeRequest(ExploreQueueBaseRequest):
+    intent: str = "subscribe"
 
 
 def _extract_search_items(payload: Any) -> list[dict]:
@@ -1148,6 +1173,36 @@ async def resolve_explore_item(payload: dict[str, Any] = Body(default={})):
     result["source"] = "douban"
     result["douban_id"] = douban_id
     return result
+
+
+@router.post("/explore/queue/subscribe")
+async def enqueue_explore_subscribe_task(payload: ExploreQueueSubscribeRequest):
+    task = await explore_action_queue_service.enqueue_subscribe(
+        payload.model_dump(),
+        payload.intent,
+    )
+    return task
+
+
+@router.post("/explore/queue/save")
+async def enqueue_explore_save_task(payload: ExploreQueueBaseRequest):
+    task = await explore_action_queue_service.enqueue_save(payload.model_dump())
+    return task
+
+
+@router.get("/explore/queue/tasks/{task_id}")
+async def get_explore_queue_task(task_id: str):
+    task = await explore_action_queue_service.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="task not found")
+    return task
+
+
+@router.get("/explore/queue/active")
+async def get_explore_queue_active_tasks(
+    queue_type: str = Query("all", pattern="^(all|subscribe|save)$"),
+):
+    return await explore_action_queue_service.list_active(queue_type)
 
 
 @router.get("/douban/subject/{douban_id}")
