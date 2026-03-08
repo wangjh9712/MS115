@@ -1209,6 +1209,13 @@ def _normalize_douban_items(
         cache_hit, cached_tmdb_id = _get_cached_tmdb_id(cache_key)
         tmdb_id = subject_cached_tmdb_id if subject_cache_hit else (cached_tmdb_id if cache_hit else None)
 
+        # 尝试从 Wikidata 缓存获取 IMDB ID
+        imdb_id = None
+        wikidata_cache_key = _build_wikidata_cache_key(subject_id)
+        wikidata_cache_hit, wikidata_bridge = _get_cached_wikidata_bridge(wikidata_cache_key)
+        if wikidata_cache_hit and wikidata_bridge:
+            imdb_id = _normalize_external_id(wikidata_bridge.get("imdb_id"))
+
         if enqueue_tmdb_backfill and not subject_cache_hit and not cache_hit:
             backfill_candidates.append(
                 {
@@ -1235,6 +1242,7 @@ def _normalize_douban_items(
                 "id": subject_id,
                 "douban_id": subject_id,
                 "tmdb_id": tmdb_id,
+                "imdb_id": imdb_id,
                 "media_type": media_type,
                 "title": title,
                 "year": year,

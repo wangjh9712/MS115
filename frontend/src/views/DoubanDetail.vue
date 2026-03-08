@@ -1405,7 +1405,8 @@ const refreshSubscribeState = async () => {
   }
   try {
     const { data } = await subscriptionApi.listForStatus({ media_type: mediaType.value })
-    const list = Array.isArray(data) ? data : []
+    // 处理新的返回格式：{ items: [], douban_id_map: {}, imdb_id_map: {} }
+    const list = Array.isArray(data) ? data : (data?.items || [])
     const matched = list.find((item) => Number(item.tmdb_id) === mappedTmdbId.value && item.media_type === mediaType.value) || null
     isSubscribed.value = Boolean(matched)
     subscriptionId.value = Number(matched?.id || 0) || null

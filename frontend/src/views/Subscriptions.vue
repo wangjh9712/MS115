@@ -129,6 +129,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { settingsApi, subscriptionApi } from '@/api'
+import { Star } from '@element-plus/icons-vue'
 
 const subscriptions = ref([])
 const loading = ref(false)
@@ -221,7 +222,9 @@ const fetchSubscriptions = async () => {
       throw listResp.reason
     }
     const data = listResp.value?.data
-    subscriptions.value = Array.isArray(data) ? data : []
+    // 处理新的返回格式：{ items: [], douban_id_map: {}, imdb_id_map: {} }
+    const items = Array.isArray(data) ? data : (data?.items || [])
+    subscriptions.value = items
     resetPosterLoadedState(subscriptions.value)
   } catch (error) {
     ElMessage.error('获取订阅列表失败')
@@ -291,7 +294,8 @@ const fetchTvMissingStatus = async (refresh = false) => {
         exclude_transferred_success: true,
         media_type: 'tv'
       })
-      const rows = Array.isArray(data) ? data : []
+      // 处理新的返回格式
+      const rows = Array.isArray(data) ? data : (data?.items || [])
       return new Set(
         rows
           .map((item) => Number(item?.id))
@@ -328,8 +332,9 @@ const refreshMissingRow = async (row) => {
       exclude_transferred_success: true,
       media_type: 'tv'
     })
+    // 处理新的返回格式
     const tvSubIdSet = new Set(
-      (Array.isArray(tvSubsData) ? tvSubsData : [])
+      (Array.isArray(tvSubsData) ? tvSubsData : (tvSubsData?.items || []))
         .map((item) => Number(item?.id))
         .filter((id) => Number.isFinite(id) && id > 0)
     )

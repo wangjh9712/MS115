@@ -131,6 +131,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { pan115Api } from '@/api'
+import { Refresh } from '@element-plus/icons-vue'
 
 const offlineTasks = ref([])
 const loading = ref(false)

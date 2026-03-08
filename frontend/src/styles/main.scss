@@ -95,7 +95,12 @@ body {
   border: 1px solid var(--ms-glass-border);
   border-radius: 14px;
   box-shadow: var(--ms-shadow-sm);
-  backdrop-filter: blur(16px);
+  /* 性能优化：仅在支持且需要时启用 backdrop-filter */
+  @supports (backdrop-filter: blur(16px)) {
+    backdrop-filter: blur(16px);
+  }
+  /* CSS Containment 优化性能 */
+  contain: layout style paint;
 }
 
 .el-card {
@@ -195,7 +200,11 @@ body {
   border: 1px solid var(--ms-glass-border) !important;
   box-shadow: var(--ms-shadow-lg) !important;
   color: var(--ms-text-primary) !important;
-  backdrop-filter: blur(16px);
+  /* 性能优化：条件启用 backdrop-filter */
+  @supports (backdrop-filter: blur(16px)) {
+    backdrop-filter: blur(16px);
+  }
+  contain: layout style;
 }
 
 .el-overlay {

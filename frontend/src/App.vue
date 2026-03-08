@@ -152,6 +152,17 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import { formatBeijingDateTime } from '@/utils/timezone'
+import {
+  VideoCamera,
+  Search,
+  Star,
+  Download,
+  Document,
+  Setting,
+  Monitor,
+  Sunny,
+  MoonNight
+} from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -283,10 +294,15 @@ html, body, #app {
 .app-aside {
   background: var(--ms-glass-bg-heavy);
   border-right: 1px solid var(--ms-glass-border);
-  backdrop-filter: blur(20px);
+  /* 性能优化：条件启用 backdrop-filter */
+  @supports (backdrop-filter: blur(20px)) {
+    backdrop-filter: blur(20px);
+  }
   display: flex;
   flex-direction: column;
   position: relative;
+  /* CSS Containment 优化 */
+  contain: layout style;
 
   &::before {
     content: '';
@@ -297,6 +313,8 @@ html, body, #app {
     height: 200px;
     background: radial-gradient(ellipse at 50% 0%, rgba(45, 153, 255, 0.22) 0%, transparent 70%);
     pointer-events: none;
+    /* 减少重绘 */
+    will-change: transform;
   }
 
   .logo {
@@ -415,7 +433,11 @@ html, body, #app {
   padding: 10px 14px;
   border-bottom: 1px solid var(--ms-glass-border);
   background: var(--ms-glass-bg-heavy);
-  backdrop-filter: blur(18px);
+  /* 性能优化：条件启用 backdrop-filter */
+  @supports (backdrop-filter: blur(18px)) {
+    backdrop-filter: blur(18px);
+  }
+  contain: layout style;
 
   .menu-toggle {
     padding: 0 4px;

@@ -40,6 +40,7 @@ class Subscription(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     douban_id: Mapped[str | None] = mapped_column(String(50), unique=True, nullable=True)
     tmdb_id: Mapped[int | None] = mapped_column(Integer, unique=True, nullable=True)
+    imdb_id: Mapped[str | None] = mapped_column(String(20), unique=True, nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     media_type: Mapped[MediaType] = mapped_column(SQLEnum(MediaType), nullable=False)
     poster_path: Mapped[str | None] = mapped_column(String(500), nullable=True)

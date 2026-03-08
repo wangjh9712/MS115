@@ -261,7 +261,29 @@ async def list_subscriptions(
     if dirty:
         await db.commit()
 
-    return subscriptions
+    # 构建 douban_id 和 imdb_id 到订阅的映射，用于前端匹配豆瓣探索数据
+    douban_id_map = {}
+    imdb_id_map = {}
+    for sub in subscriptions:
+        if sub.douban_id:
+            douban_id_map[sub.douban_id] = {
+                "id": sub.id,
+                "tmdb_id": sub.tmdb_id,
+                "media_type": sub.media_type.value if sub.media_type else None,
+            }
+        if sub.imdb_id:
+            imdb_id_map[sub.imdb_id] = {
+                "id": sub.id,
+                "tmdb_id": sub.tmdb_id,
+                "douban_id": sub.douban_id,
+                "media_type": sub.media_type.value if sub.media_type else None,
+            }
+
+    return {
+        "items": subscriptions,
+        "douban_id_map": douban_id_map,
+        "imdb_id_map": imdb_id_map,
+    }
 
 
 @router.get("/{subscription_id}")

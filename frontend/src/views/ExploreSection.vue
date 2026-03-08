@@ -81,6 +81,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { searchApi, subscriptionApi, pan115Api } from '@/api'
+import { Star, FolderAdd } from '@element-plus/icons-vue'
 
 const SECTION_BATCH_CACHE_TTL_MS = 5 * 60 * 1000
 const sectionBatchCache = new Map()
@@ -123,6 +124,8 @@ let loadObserver = null
 let prefetchTimer = null
 let batchLoadPromise = null
 const subscribedIdMap = ref(new Map())
+const subscribedDoubanIds = ref(new Set()) // 存储豆瓣ID订阅集合
+const subscribedImdbIds = ref(new Set()) // 存储IMDB ID订阅集合
 
 const toValidTmdbId = (rawId) => {
   const id = Number(rawId)
@@ -140,7 +143,12 @@ const buildSubscribedKey = (mediaType, tmdbId) => {
 const applySubscribedFlag = (item) => {
   if (!item || typeof item !== 'object') return
   const key = buildSubscribedKey(item.media_type, item.tmdb_id)
-  item.isSubscribed = Boolean(key) && subscribedIdMap.value.has(key)
+  const doubanId = item.douban_id || item.id
+  const imdbId = item.imdb_id
+  // 优先使用 tmdb_id 匹配，其次使用 douban_id 或 imdb_id
+  item.isSubscribed = (Boolean(key) && subscribedIdMap.value.has(key)) ||
+                      (doubanId && subscribedDoubanIds.value.has(String(doubanId))) ||
+                      (imdbId && subscribedImdbIds.value.has(String(imdbId).toLowerCase()))
 }
 
 const applySubscribedFlags = () => {
@@ -152,13 +160,42 @@ const applySubscribedFlags = () => {
 const refreshSubscribedMap = async () => {
   try {
     const { data } = await subscriptionApi.listForStatus()
+
+    // 处理新的返回格式：{ items: [], douban_id_map: {}, imdb_id_map: {} }
+    const items = Array.isArray(data) ? data : (data.items || [])
+    const doubanIdMap = data.douban_id_map || {}
+    const imdbIdMap = data.imdb_id_map || {}
+
     const nextMap = new Map()
-    for (const sub of Array.isArray(data) ? data : []) {
+    const nextDoubanIds = new Set()
+    const nextImdbIds = new Set()
+
+    for (const sub of items) {
       const key = buildSubscribedKey(sub.media_type, sub.tmdb_id)
       const id = Number(sub.id || 0)
       if (key && id > 0) nextMap.set(key, id)
+      // 同时收集 douban_id 和 imdb_id
+      if (sub.douban_id) {
+        nextDoubanIds.add(String(sub.douban_id))
+      }
+      if (sub.imdb_id) {
+        nextImdbIds.add(String(sub.imdb_id).toLowerCase())
+      }
     }
+
+    // 从 douban_id_map 补充豆瓣ID
+    for (const doubanId of Object.keys(doubanIdMap)) {
+      nextDoubanIds.add(String(doubanId))
+    }
+
+    // 从 imdb_id_map 补充 IMDB ID
+    for (const imdbId of Object.keys(imdbIdMap)) {
+      nextImdbIds.add(String(imdbId).toLowerCase())
+    }
+
     subscribedIdMap.value = nextMap
+    subscribedDoubanIds.value = nextDoubanIds
+    subscribedImdbIds.value = nextImdbIds
     applySubscribedFlags()
   } catch {
     // ignore subscription sync errors

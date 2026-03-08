@@ -484,6 +484,7 @@ import { computed, ref, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { searchApi, subscriptionApi, pan115Api } from '@/api'
+import { Star, Plus } from '@element-plus/icons-vue'
 
 const route = useRoute()
 
@@ -1135,7 +1136,8 @@ const checkSubscribed = async () => {
   }
   try {
     const { data } = await subscriptionApi.listForStatus({ media_type: 'movie' })
-    const items = Array.isArray(data) ? data : []
+    // 处理新的返回格式：{ items: [], douban_id_map: {}, imdb_id_map: {} }
+    const items = Array.isArray(data) ? data : (data?.items || [])
     const matched = items.find((sub) => Number(sub.tmdb_id) === tmdbId) || null
     isSubscribed.value = Boolean(matched)
     subscriptionId.value = Number(matched?.id || 0) || null
