@@ -32,6 +32,8 @@ from app.services.tmdb_explore_service import TMDB_SECTION_SOURCES, fetch_tmdb_s
 
 router = APIRouter(prefix="/search", tags=["search"])
 logger = logging.getLogger(__name__)
+EXPLORE_HOME_SECTION_LIMIT = 12
+DOUBAN_HOME_SYNC_PRIME_LIMIT = 0
 
 POPULAR_MOVIES_URL = "https://popular-movies-data.stevenlu.com/movies.json"
 POPULAR_CACHE_TTL_SECONDS = 60 * 60 * 6
@@ -971,6 +973,110 @@ async def get_explore_sections(
     async with httpx.AsyncClient(timeout=12.0, http2=True) as client:
         tasks = [
             fetch_douban_section(section, limit, refresh, client=client)
+            for section in DOUBAN_SECTION_SOURCES
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    sections = []
+    errors = []
+    for section, result in zip(DOUBAN_SECTION_SOURCES, results):
+        if isinstance(result, Exception):
+            errors.append({"key": section["key"], "error": str(result)})
+            continue
+        if not isinstance(result, dict):
+            errors.append({"key": section["key"], "error": "Invalid Douban section payload"})
+            continue
+        sections.append(
+            {
+                "key": result["key"],
+                "title": result["title"],
+                "tag": result["tag"],
+                "source_url": result["source_url"],
+                "fetched_at": result["fetched_at"],
+                "total": result["total"],
+                "items": result.get("items", [])[:limit],
+            }
+        )
+
+    if not sections:
+        fallback = await get_explore_popular_sections(limit=limit, refresh=refresh)
+        fallback_source = fallback.get("source", "popular-movies-data.stevenlu.com")
+        fallback_errors = fallback.get("errors", [])
+        return {
+            "source": f"fallback:{fallback_source}",
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "sections": fallback.get("sections", []),
+            "errors": errors + fallback_errors,
+        }
+
+    return {
+        "source": "douban-frodo",
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "sections": sections,
+        "errors": errors,
+    }
+
+
+@router.get("/explore/home")
+async def get_explore_home(
+    source: str = Query("douban", pattern="^(douban|tmdb)$", description="Explore source"),
+    refresh: bool = Query(False, description="Force refresh cache"),
+):
+    normalized_source = source if source in {"douban", "tmdb"} else "douban"
+    limit = EXPLORE_HOME_SECTION_LIMIT
+
+    if normalized_source == "tmdb":
+        async with httpx.AsyncClient(timeout=12.0, http2=True) as client:
+            tasks = [
+                fetch_tmdb_section(section, limit, refresh, client=client)
+                for section in TMDB_SECTION_SOURCES
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        sections = []
+        errors = []
+        for section, result in zip(TMDB_SECTION_SOURCES, results):
+            if isinstance(result, Exception):
+                errors.append({"key": section["key"], "error": str(result)})
+                continue
+            if not isinstance(result, dict):
+                errors.append({"key": section["key"], "error": "Invalid TMDB section payload"})
+                continue
+            sections.append(
+                {
+                    "key": result["key"],
+                    "title": result["title"],
+                    "tag": result["tag"],
+                    "source_url": result["source_url"],
+                    "fetched_at": result["fetched_at"],
+                    "total": result["total"],
+                    "items": result.get("items", [])[:limit],
+                }
+            )
+
+        if not sections:
+            if errors:
+                first_error = str(errors[0].get("error") or "")
+                if "TMDB_API_KEY is not configured" in first_error:
+                    raise HTTPException(status_code=400, detail="TMDB API Key 未配置")
+            raise HTTPException(status_code=502, detail="Failed to fetch TMDB explore home")
+
+        return {
+            "source": "tmdb",
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "sections": sections,
+            "errors": errors,
+        }
+
+    async with httpx.AsyncClient(timeout=12.0, http2=True) as client:
+        tasks = [
+            fetch_douban_section(
+                section,
+                limit,
+                refresh,
+                client=client,
+                home_prime_limit=DOUBAN_HOME_SYNC_PRIME_LIMIT,
+            )
             for section in DOUBAN_SECTION_SOURCES
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)

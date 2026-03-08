@@ -66,6 +66,44 @@ async def resolve_tmdb_poster_path(tmdb_id: int | None, media_type: MediaType | 
     return sanitize_poster_path(payload.get("poster_path"))
 
 
+def _build_subscription_status_payload(subscriptions: list[Subscription]) -> dict[str, Any]:
+    items = []
+    douban_id_map = {}
+    imdb_id_map = {}
+
+    for sub in subscriptions:
+        media_type_value = sub.media_type.value if sub.media_type else None
+        item = {
+            "id": sub.id,
+            "tmdb_id": sub.tmdb_id,
+            "douban_id": sub.douban_id,
+            "imdb_id": sub.imdb_id,
+            "media_type": media_type_value,
+            "title": sub.title,
+        }
+        items.append(item)
+
+        if sub.douban_id:
+            douban_id_map[sub.douban_id] = {
+                "id": sub.id,
+                "tmdb_id": sub.tmdb_id,
+                "media_type": media_type_value,
+            }
+        if sub.imdb_id:
+            imdb_id_map[sub.imdb_id] = {
+                "id": sub.id,
+                "tmdb_id": sub.tmdb_id,
+                "douban_id": sub.douban_id,
+                "media_type": media_type_value,
+            }
+
+    return {
+        "items": items,
+        "douban_id_map": douban_id_map,
+        "imdb_id_map": imdb_id_map,
+    }
+
+
 def classify_failure_reason(error_text: str) -> str:
     text = str(error_text or "").lower()
     if not text:
@@ -348,29 +386,26 @@ async def list_subscriptions(
     if dirty:
         await db.commit()
 
-    # 构建 douban_id 和 imdb_id 到订阅的映射，用于前端匹配豆瓣探索数据
-    douban_id_map = {}
-    imdb_id_map = {}
-    for sub in subscriptions:
-        if sub.douban_id:
-            douban_id_map[sub.douban_id] = {
-                "id": sub.id,
-                "tmdb_id": sub.tmdb_id,
-                "media_type": sub.media_type.value if sub.media_type else None,
-            }
-        if sub.imdb_id:
-            imdb_id_map[sub.imdb_id] = {
-                "id": sub.id,
-                "tmdb_id": sub.tmdb_id,
-                "douban_id": sub.douban_id,
-                "media_type": sub.media_type.value if sub.media_type else None,
-            }
+    payload = _build_subscription_status_payload(subscriptions)
+    payload["items"] = subscriptions
+    return payload
 
-    return {
-        "items": subscriptions,
-        "douban_id_map": douban_id_map,
-        "imdb_id_map": imdb_id_map,
-    }
+
+@router.get("/status-map")
+async def get_subscription_status_map(
+    is_active: Optional[bool] = True,
+    media_type: Optional[MediaType] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    query = select(Subscription)
+    if is_active is not None:
+        query = query.where(Subscription.is_active == is_active)
+    if media_type:
+        query = query.where(Subscription.media_type == media_type)
+
+    result = await db.execute(query.order_by(Subscription.created_at.desc()))
+    subscriptions = result.scalars().all()
+    return _build_subscription_status_payload(subscriptions)
 
 
 @router.get("/{subscription_id}")

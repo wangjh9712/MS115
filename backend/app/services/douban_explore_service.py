@@ -1359,6 +1359,23 @@ async def _prime_tmdb_ids_for_first_screen(items: list[dict[str, Any]], candidat
     _hydrate_tmdb_ids_from_cache(items)
 
 
+async def _prime_tmdb_ids_for_home_screen(
+    items: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    limit: int,
+) -> None:
+    effective_limit = max(int(limit or 0), 0)
+    if not items or not candidates or effective_limit <= 0:
+        return
+
+    prime_candidates = candidates[:effective_limit]
+    if not prime_candidates:
+        return
+
+    await _backfill_tmdb_ids(prime_candidates)
+    _hydrate_tmdb_ids_from_cache(items)
+
+
 def _extract_subject_year(payload: dict[str, Any], fallback_year: Optional[str]) -> Optional[str]:
     if isinstance(fallback_year, str) and re.fullmatch(r"(?:19|20)\d{2}", fallback_year):
         return fallback_year
@@ -1561,6 +1578,7 @@ async def fetch_douban_section(
     refresh: bool,
     start: int = 0,
     client: Optional[httpx.AsyncClient] = None,
+    home_prime_limit: Optional[int] = None,
 ) -> dict[str, Any]:
     key = source["key"]
     now = time.time()
@@ -1622,8 +1640,10 @@ async def fetch_douban_section(
             rank_start=start + 1,
         )
 
-        if start == 0:
+        if start == 0 and home_prime_limit is None:
             await _prime_tmdb_ids_for_first_screen(items, backfill_candidates)
+        elif start == 0 and home_prime_limit is not None:
+            await _prime_tmdb_ids_for_home_screen(items, backfill_candidates, home_prime_limit)
 
         _schedule_tmdb_backfill(
             candidates=backfill_candidates,

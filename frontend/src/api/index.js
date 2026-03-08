@@ -42,6 +42,8 @@ api.interceptors.response.use(
 
 export const searchApi = {
   search: (query, page = 1) => api.get('/search', { params: { query, page } }),
+  getExploreHomeSections: (source = 'douban', refresh = false) =>
+    api.get('/search/explore/home', { params: { source, refresh } }),
   getExploreSections: (source = 'douban', limit = 24, refresh = false) =>
     api.get('/search/explore/sections', { params: { source, limit, refresh } }),
   getExploreSection: (source = 'douban', sectionKey, limit = 30, refresh = false, start = 0) =>
@@ -162,7 +164,7 @@ export const logsApi = {
 
 export const subscriptionApi = {
   list: (params) => api.get('/subscriptions', { params }),
-  listForStatus: (params) => api.get('/subscriptions', {
+  listForStatus: (params) => api.get('/subscriptions/status-map', {
     params: {
       is_active: true,
       ...(params || {})

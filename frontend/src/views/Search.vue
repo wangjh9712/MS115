@@ -1243,7 +1243,7 @@ const normalizeSearchResultItem = (item, index = 0, fallbackService = '') => {
 const fetchExploreSections = async () => {
   exploreLoading.value = true
   try {
-    const { data } = await searchApi.getExploreSections(exploreSource.value, HOME_SECTION_BATCH_SIZE)
+    const { data } = await searchApi.getExploreHomeSections(exploreSource.value)
     const sections = Array.isArray(data.sections) ? data.sections : []
     homeSectionMetaMap.clear()
     exploreSections.value = sections.map((section) => {
@@ -1275,6 +1275,15 @@ const fetchExploreSections = async () => {
   } finally {
     exploreLoading.value = false
   }
+}
+
+const initializeExploreHome = async () => {
+  const tasks = [
+    fetchExploreSections(),
+    refreshSubscribedKeys(),
+    fetchExploreQueueActiveTasks()
+  ]
+  await Promise.allSettled(tasks)
 }
 
 const clearHomePrefetchTimers = () => {
@@ -1607,9 +1616,8 @@ const resetExploreState = () => {
 }
 
 onMounted(async () => {
-  await refreshSubscribedKeys()
+  await initializeExploreHome()
   startExploreQueuePolling()
-  await fetchExploreSections()
   setupSectionResizeObserver()
   window.addEventListener('resize', refreshAllSectionScrollStates)
 })
@@ -1617,7 +1625,7 @@ onMounted(async () => {
 watch(exploreSource, async (newSource, oldSource) => {
   if (newSource === oldSource) return
   resetExploreState()
-  await fetchExploreSections()
+  await initializeExploreHome()
   cleanupSectionResizeObserver()
   setupSectionResizeObserver()
 })
