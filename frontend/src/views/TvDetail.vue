@@ -734,6 +734,32 @@ const getResourceSourceLabel = (service) => {
 
 const resolvePanShareLink = (row) => String(row?.share_link || row?.share_url || row?.pan115_share_link || '').trim()
 
+const parseReceiveCodeFromShareLink = (shareLink) => {
+  const rawLink = String(shareLink || '').trim()
+  if (!rawLink) return ''
+
+  const shortMatch = rawLink.match(/^[A-Za-z0-9]+-([A-Za-z0-9]{4})$/)
+  if (shortMatch) return shortMatch[1]
+
+  const passwordMatch = rawLink.match(/[?&](?:password|pwd|receive_code|pickcode|code)=([^&#]+)/i)
+  if (passwordMatch) {
+    try {
+      return decodeURIComponent(passwordMatch[1])
+    } catch {
+      return passwordMatch[1]
+    }
+  }
+
+  return ''
+}
+
+const resolvePanReceiveCode = (row, shareLink = '') => {
+  const resolvedLink = String(shareLink || resolvePanShareLink(row)).trim()
+  const linkCode = parseReceiveCodeFromShareLink(resolvedLink)
+  if (linkCode) return linkCode
+  return String(row?.access_code || row?.hdhive_access_code || '').trim()
+}
+
 const isHdhiveResourceLocked = (row) => {
   if (!row || row.source_service !== 'hdhive') return false
   if (row.hdhive_locked === true) return true
@@ -806,6 +832,7 @@ const ensureHdhiveShareLink = async (row, actionLabel = '转存', options = {}) 
       throw new Error(data?.message || '未获取到分享链接')
     }
     row.share_link = shareLink
+    row.access_code = String(data?.access_code || row?.access_code || '').trim()
     row.pan115_savable = true
     row.hdhive_locked = false
     row.hdhive_lock_code = ''
@@ -1217,6 +1244,7 @@ const handleSaveToPan115 = async (item) => {
 
   const seasonSuffix = selectedSeason.value ? ` S${String(selectedSeason.value).padStart(2, '0')}` : ''
   const folderName = tv.value.name + ' (' + tv.value.first_air_date?.split('-')[0] + ')' + seasonSuffix
+  const receiveCode = resolvePanReceiveCode(item, shareLink)
   
   try {
     // 由后端统一解析分享链接并执行转存
@@ -1224,7 +1252,7 @@ const handleSaveToPan115 = async (item) => {
       shareLink,
       folderName,
       defaultFolderId,
-      '',
+      receiveCode,
       Number(route.params.id)
     )
 
@@ -1250,11 +1278,12 @@ const handleSaveToPan115 = async (item) => {
       })
       if (unlockedLink) {
         try {
+          const unlockedReceiveCode = resolvePanReceiveCode(item, unlockedLink)
           const { data } = await pan115Api.saveShareToFolder(
             unlockedLink,
             folderName,
             defaultFolderId,
-            '',
+            unlockedReceiveCode,
             Number(route.params.id)
           )
           const retrySuccess = data?.success === true
@@ -1296,8 +1325,10 @@ const handleSelectSave = async (item) => {
   }
 
   const seasonSuffix = selectedSeason.value ? ` S${String(selectedSeason.value).padStart(2, '0')}` : ''
+  const receiveCode = resolvePanReceiveCode(item, shareLink)
   selectSaveForm.value = {
     shareLink,
+    receiveCode,
     targetFolder: defaultFolderId,
     newFolderName: tv.value.name + ' (' + tv.value.first_air_date?.split('-')[0] + ')' + seasonSuffix
   }
@@ -1309,7 +1340,7 @@ const handleSelectSave = async (item) => {
   extractingFiles.value = true
 
   try {
-    const { data } = await pan115Api.extractShareFiles(shareLink)
+    const { data } = await pan115Api.extractShareFiles(shareLink, receiveCode)
     if (data && Array.isArray(data.list)) {
       // 过滤视频文件
       const videoRegex = /\.(mp4|mkv|avi|rmvb|flv|ts|mov|wmv)$/i
@@ -1327,8 +1358,10 @@ const handleSelectSave = async (item) => {
       })
       if (unlockedLink) {
         try {
+          const unlockedReceiveCode = resolvePanReceiveCode(item, unlockedLink)
           selectSaveForm.value.shareLink = unlockedLink
-          const { data } = await pan115Api.extractShareFiles(unlockedLink)
+          selectSaveForm.value.receiveCode = unlockedReceiveCode
+          const { data } = await pan115Api.extractShareFiles(unlockedLink, unlockedReceiveCode)
           if (data && Array.isArray(data.list)) {
             const videoRegex = /\.(mp4|mkv|avi|rmvb|flv|ts|mov|wmv)$/i
             shareFilesList.value = data.list.filter(f => videoRegex.test(f.name || ''))
@@ -1385,7 +1418,8 @@ const confirmSelectSave = async () => {
       selectSaveForm.value.shareLink,
       selectedFiles.value,
       selectSaveForm.value.newFolderName,
-      selectSaveForm.value.targetFolder
+      selectSaveForm.value.targetFolder,
+      selectSaveForm.value.receiveCode
     )
     
     if (data?.success || data?.result?.success) {

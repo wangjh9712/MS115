@@ -721,6 +721,32 @@ const getResourceSourceLabel = (service) => {
 
 const resolvePanShareLink = (row) => String(row?.share_link || row?.share_url || row?.pan115_share_link || '').trim()
 
+const parseReceiveCodeFromShareLink = (shareLink) => {
+  const rawLink = String(shareLink || '').trim()
+  if (!rawLink) return ''
+
+  const shortMatch = rawLink.match(/^[A-Za-z0-9]+-([A-Za-z0-9]{4})$/)
+  if (shortMatch) return shortMatch[1]
+
+  const passwordMatch = rawLink.match(/[?&](?:password|pwd|receive_code|pickcode|code)=([^&#]+)/i)
+  if (passwordMatch) {
+    try {
+      return decodeURIComponent(passwordMatch[1])
+    } catch {
+      return passwordMatch[1]
+    }
+  }
+
+  return ''
+}
+
+const resolvePanReceiveCode = (row, shareLink = '') => {
+  const resolvedLink = String(shareLink || resolvePanShareLink(row)).trim()
+  const linkCode = parseReceiveCodeFromShareLink(resolvedLink)
+  if (linkCode) return linkCode
+  return String(row?.access_code || row?.hdhive_access_code || '').trim()
+}
+
 const isHdhiveResourceLocked = (row) => {
   if (!row || row.source_service !== 'hdhive') return false
   if (row.hdhive_locked === true) return true
@@ -793,6 +819,7 @@ const ensureHdhiveShareLink = async (row, actionLabel = '转存', options = {}) 
       throw new Error(data?.message || '未获取到分享链接')
     }
     row.share_link = shareLink
+    row.access_code = String(data?.access_code || row?.access_code || '').trim()
     row.pan115_savable = true
     row.hdhive_locked = false
     row.hdhive_lock_code = ''
@@ -1194,12 +1221,13 @@ const handleSaveToPan115 = async (item) => {
   }
 
   try {
+    const receiveCode = resolvePanReceiveCode(item, shareLink)
     // 由后端统一解析分享链接并执行转存
     const { data } = await pan115Api.saveShareToFolder(
       shareLink,
       movie.value.title + ' (' + movie.value.release_date?.split('-')[0] + ')',
       defaultFolderId,
-      ''
+      receiveCode
     )
 
     const saveSuccess = data?.success === true
@@ -1224,11 +1252,12 @@ const handleSaveToPan115 = async (item) => {
       })
       if (unlockedLink) {
         try {
+          const unlockedReceiveCode = resolvePanReceiveCode(item, unlockedLink)
           const { data } = await pan115Api.saveShareToFolder(
             unlockedLink,
             movie.value.title + ' (' + movie.value.release_date?.split('-')[0] + ')',
             defaultFolderId,
-            ''
+            unlockedReceiveCode
           )
           const retrySuccess = data?.success === true
             || data?.state === true

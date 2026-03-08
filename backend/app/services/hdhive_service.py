@@ -503,6 +503,7 @@ class HDHiveService:
             "quality": quality,
             "resolution": resolution,
             "share_link": share_link,
+            "access_code": str(lock_meta.get("access_code") or ""),
             "unlock_points": unlock_points,
             "hdhive_locked": bool(lock_meta.get("locked")),
             "hdhive_lock_code": str(lock_meta.get("lock_code") or ""),
