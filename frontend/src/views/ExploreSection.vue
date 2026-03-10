@@ -115,6 +115,7 @@ const loadAnchorRef = ref(null)
 const remoteTotal = ref(0)
 const nextOffset = ref(0)
 const fetchedOnce = ref(false)
+const isLoadAnchorIntersecting = ref(false)
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w500'
 const PRIORITY_POSTER_COUNT = 8
 const API_BATCH_SIZE = 30
@@ -126,6 +127,7 @@ const PREFETCH_ROOT_MARGIN = EXPLORE_SPEED_MODE === 'extreme' ? '1800px 0px' : '
 let loadObserver = null
 let prefetchTimer = null
 let prefetchCursor = 0
+let autoLoadScheduled = false
 const prefetchedOffsets = new Set()
 const prefetchOffsetsInFlight = new Set()
 let activeSectionToken = 0
@@ -658,6 +660,8 @@ const resetSectionState = () => {
   sectionMeta.tag = ''
   sectionMeta.source_url = ''
   sectionMeta.fetched_at = ''
+  isLoadAnchorIntersecting.value = false
+  autoLoadScheduled = false
   resetPrefetchState()
   clearPrefetchTimer()
   disconnectLoadObserver()
@@ -808,21 +812,46 @@ const schedulePrefetch = () => {
   }, PREFETCH_DELAY_MS)
 }
 
+const scheduleAutoLoadMore = () => {
+  if (autoLoadScheduled) return
+  if (loading.value || loadingMore.value) return
+  if (!isLoadAnchorIntersecting.value || !hasMoreItems.value) return
+
+  autoLoadScheduled = true
+  setTimeout(async () => {
+    autoLoadScheduled = false
+    if (loading.value || loadingMore.value) return
+    if (!isLoadAnchorIntersecting.value || !hasMoreItems.value) return
+    await loadMoreData()
+  }, 0)
+}
+
 const loadMoreData = async () => {
   if (loading.value || loadingMore.value) return
-  if (revealNextCards()) {
-    schedulePrefetch()
-    return
-  }
-  if (!hasMoreRemote.value && fetchedOnce.value) return
+  let progressed = false
+  try {
+    if (revealNextCards()) {
+      progressed = true
+      return
+    }
+    if (!hasMoreRemote.value && fetchedOnce.value) return
 
-  const appended = await fetchNextBatch()
-  if (appended > 0 && !hasHiddenLocal.value) {
-    displayCount.value = Math.min(displayCount.value + RENDER_BATCH_SIZE, allItems.value.length)
-  } else if (displayCount.value === 0) {
-    displayCount.value = Math.min(RENDER_BATCH_SIZE, allItems.value.length)
+    const appended = await fetchNextBatch()
+    if (appended > 0 && !hasHiddenLocal.value) {
+      displayCount.value = Math.min(displayCount.value + RENDER_BATCH_SIZE, allItems.value.length)
+      progressed = true
+    } else if (displayCount.value === 0) {
+      displayCount.value = Math.min(RENDER_BATCH_SIZE, allItems.value.length)
+      progressed = displayCount.value > 0
+    } else if (appended > 0) {
+      progressed = true
+    }
+  } finally {
+    schedulePrefetch()
+    if (progressed) {
+      scheduleAutoLoadMore()
+    }
   }
-  schedulePrefetch()
 }
 
 const setupLoadObserver = () => {
@@ -831,7 +860,9 @@ const setupLoadObserver = () => {
   if (!loadAnchorRef.value || !hasMoreItems.value) return
 
   loadObserver = new IntersectionObserver((entries) => {
-    if (!entries.some((entry) => entry.isIntersecting)) return
+    const isIntersecting = entries.some((entry) => entry.isIntersecting)
+    isLoadAnchorIntersecting.value = isIntersecting
+    if (!isIntersecting) return
     loadMoreData()
   }, {
     root: null,
@@ -882,9 +913,13 @@ watch(() => hasMoreItems.value, async () => {
 
 watch(() => [displayCount.value, allItems.value.length, hasMoreRemote.value], () => {
   schedulePrefetch()
+  scheduleAutoLoadMore()
 })
 
 watch(loadAnchorRef, () => {
+  if (!loadAnchorRef.value) {
+    isLoadAnchorIntersecting.value = false
+  }
   setupLoadObserver()
 })
 
