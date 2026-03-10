@@ -13,9 +13,6 @@ from app.services.tmdb_explore_service import TMDB_SECTION_SOURCES, fetch_tmdb_s
 logger = logging.getLogger("uvicorn.error")
 
 EXPLORE_HOME_WARMUP_LIMIT = 12
-EXPLORE_HOME_WARMUP_TIMEOUT_SECONDS = 60.0
-
-
 class ExploreHomeWarmupService:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
@@ -67,24 +64,8 @@ class ExploreHomeWarmupService:
             started_at = time.perf_counter()
             logger.info("explore home warmup started force_refresh=%s", force_refresh)
             try:
-                result = await asyncio.wait_for(
-                    self._warmup_all_sources(force_refresh=force_refresh),
-                    timeout=EXPLORE_HOME_WARMUP_TIMEOUT_SECONDS,
-                )
+                result = await self._warmup_all_sources(force_refresh=force_refresh)
                 result["timed_out"] = False
-            except asyncio.TimeoutError:
-                elapsed_ms = int((time.perf_counter() - started_at) * 1000)
-                logger.warning(
-                    "explore home warmup timed out after %sms",
-                    elapsed_ms,
-                )
-                return {
-                    "success": False,
-                    "timed_out": True,
-                    "elapsed_ms": elapsed_ms,
-                    "sources": [],
-                    "message": "explore home warmup timed out",
-                }
             except Exception as exc:
                 elapsed_ms = int((time.perf_counter() - started_at) * 1000)
                 logger.warning(
