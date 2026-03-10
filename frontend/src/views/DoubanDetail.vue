@@ -53,6 +53,11 @@
         <el-tab-pane label="115网盘" name="pan115">
           <el-tabs v-model="pan115SourceTab" class="source-tabs">
             <el-tab-pane label="Nullbr" name="nullbr">
+              <div class="resource-tools">
+                <el-button size="small" type="primary" plain :loading="pan115Loading" @click="fetchPan115Nullbr">
+                  {{ nullbrTried ? '刷新 Nullbr' : '用 Nullbr 获取资源' }}
+                </el-button>
+              </div>
               <div v-loading="pan115Loading">
                 <el-table v-if="nullbrPan115Resources.length" :data="pagedNullbrPan115Resources" stripe class="resource-table">
                   <el-table-column label="资源名称" min-width="360" show-overflow-tooltip>
@@ -294,6 +299,11 @@
         <el-tab-pane label="磁力链接" name="magnet">
           <el-tabs v-model="magnetSourceTab" class="source-tabs">
             <el-tab-pane label="Nullbr" name="nullbr">
+              <div class="resource-tools">
+                <el-button size="small" type="primary" plain :loading="magnetLoading" @click="fetchMagnetNullbr">
+                  {{ nullbrMagnetTried ? '刷新 Nullbr' : '用 Nullbr 获取磁链' }}
+                </el-button>
+              </div>
               <div v-loading="magnetLoading">
                 <el-table v-if="nullbrMagnetResources.length" :data="nullbrMagnetResources" stripe class="resource-table">
                   <el-table-column label="资源名称" min-width="380" show-overflow-tooltip>
@@ -341,6 +351,11 @@
         </el-tab-pane>
 
         <el-tab-pane label="ED2K" name="ed2k">
+          <div class="resource-tools">
+            <el-button size="small" type="primary" plain :loading="ed2kLoading" @click="fetchEd2kResources">
+              {{ ed2kTried ? '刷新 Nullbr' : '用 Nullbr 获取 ED2K' }}
+            </el-button>
+          </div>
           <div v-loading="ed2kLoading">
             <el-table v-if="ed2kResources.length" :data="ed2kResources" stripe class="resource-table">
               <el-table-column label="资源名称" min-width="380" show-overflow-tooltip>
@@ -1133,9 +1148,6 @@ const ensureActiveTabLoaded = async () => {
       }
       return
     }
-    if (nullbrPan115Resources.value.length === 0 && !pan115Loading.value && !nullbrTried.value) {
-      await fetchPan115Nullbr()
-    }
     return
   }
 
@@ -1146,14 +1158,7 @@ const ensureActiveTabLoaded = async () => {
       }
       return
     }
-    if (nullbrMagnetResources.value.length === 0 && !magnetLoading.value && !nullbrMagnetTried.value) {
-      await fetchMagnetNullbr()
-    }
     return
-  }
-
-  if (activeTab.value === 'ed2k' && ed2kResources.value.length === 0 && !ed2kLoading.value && !ed2kTried.value) {
-    await fetchEd2kResources()
   }
 }
 
@@ -1552,9 +1557,6 @@ const handleRematchTmdb = async () => {
     if (mappedTmdbId.value) {
       ElMessage.success('TMDB 匹配成功')
       await refreshSubscribeState()
-      if (pan115SourceTab.value === 'nullbr') {
-        await fetchPan115Nullbr()
-      }
       await ensureActiveTabLoaded()
       return
     }
@@ -1597,18 +1599,11 @@ watch(pan115SourceTab, async (tab) => {
     await fetchTgPan115()
     return
   }
-  if (tab === 'nullbr' && nullbrPan115Resources.value.length === 0 && !pan115Loading.value && !nullbrTried.value) {
-    await fetchPan115Nullbr()
-  }
 })
 
 watch(magnetSourceTab, async (tab) => {
   if (tab === 'seedhub' && seedhubMagnetResources.value.length === 0 && !seedhubMagnetLoading.value && !seedhubMagnetTried.value) {
     await fetchSeedhubMagnet()
-    return
-  }
-  if (tab === 'nullbr' && nullbrMagnetResources.value.length === 0 && !magnetLoading.value && !nullbrMagnetTried.value) {
-    await fetchMagnetNullbr()
   }
 })
 

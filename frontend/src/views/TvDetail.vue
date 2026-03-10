@@ -61,6 +61,17 @@
         <el-tab-pane label="115网盘" name="pan115">
           <el-tabs v-model="pan115SourceTab" class="source-tabs">
             <el-tab-pane label="Nullbr" name="nullbr">
+              <div class="resource-tools">
+                <el-button
+                  size="small"
+                  type="primary"
+                  plain
+                  :loading="pan115Loading"
+                  @click="fetchPan115(true)"
+                >
+                  {{ nullbrTried ? '刷新 Nullbr' : '用 Nullbr 获取资源' }}
+                </el-button>
+              </div>
               <div v-loading="pan115Loading">
                 <el-table 
                   v-if="nullbrPan115Resources.length > 0" 
@@ -114,7 +125,10 @@
                     @current-change="(page) => (pan115Pager.nullbr = page)"
                   />
                 </div>
-                <el-empty v-else description="Nullbr 暂无115网盘资源" />
+                <el-empty
+                  v-else
+                  :description="nullbrTried ? 'Nullbr 暂无115网盘资源' : '尚未获取 Nullbr 资源'"
+                />
               </div>
             </el-tab-pane>
 
@@ -354,6 +368,17 @@
         <el-tab-pane label="磁力链接" name="magnet">
           <el-tabs v-model="magnetSourceTab" class="source-tabs">
             <el-tab-pane label="Nullbr" name="nullbr">
+              <div class="resource-tools">
+                <el-button
+                  size="small"
+                  type="primary"
+                  plain
+                  :loading="magnetLoading"
+                  @click="fetchMagnet()"
+                >
+                  {{ nullbrMagnetTried ? '刷新 Nullbr' : '用 Nullbr 获取磁链' }}
+                </el-button>
+              </div>
               <div v-loading="magnetLoading">
                 <el-table
                   v-if="nullbrMagnetResources.length > 0"
@@ -382,7 +407,10 @@
                     </template>
                   </el-table-column>
                 </el-table>
-                <el-empty v-else description="Nullbr 暂无磁力资源" />
+                <el-empty
+                  v-else
+                  :description="nullbrMagnetTried ? 'Nullbr 暂无磁力资源' : '尚未获取 Nullbr 磁力资源'"
+                />
               </div>
             </el-tab-pane>
 
@@ -436,6 +464,17 @@
         </el-tab-pane>
 
         <el-tab-pane label="ED2K" name="ed2k">
+          <div class="resource-tools">
+            <el-button
+              size="small"
+              type="primary"
+              plain
+              :loading="ed2kLoading"
+              @click="fetchEd2k()"
+            >
+              {{ ed2kTried ? '刷新 Nullbr' : '用 Nullbr 获取 ED2K' }}
+            </el-button>
+          </div>
           <div v-loading="ed2kLoading">
             <el-table 
               v-if="ed2kResources.length > 0" 
@@ -464,7 +503,10 @@
                 </template>
               </el-table-column>
             </el-table>
-            <el-empty v-else description="暂无ED2K资源" />
+            <el-empty
+              v-else
+              :description="ed2kTried ? '暂无 ED2K 资源' : '尚未获取 ED2K 资源'"
+            />
           </div>
         </el-tab-pane>
 
@@ -558,6 +600,7 @@ const magnetResources = ref([])
 const ed2kResources = ref([])
 
 const pan115Loading = ref(false)
+const nullbrTried = ref(false)
 const pansouLoading = ref(false)
 const pansouTried = ref(false)
 const hdhiveLoading = ref(false)
@@ -565,11 +608,13 @@ const hdhiveTried = ref(false)
 const tgLoading = ref(false)
 const tgTried = ref(false)
 const magnetLoading = ref(false)
+const nullbrMagnetTried = ref(false)
 const seedhubMagnetLoading = ref(false)
 const seedhubMagnetTried = ref(false)
 const seedhubMagnetTaskId = ref('')
 let seedhubPollTimer = null
 const ed2kLoading = ref(false)
+const ed2kTried = ref(false)
 const isSubscribed = ref(false)
 const isInEmby = ref(false)
 const subscriptionId = ref(null)
@@ -949,9 +994,10 @@ const fetchExternalIds = async (tmdbId) => {
   }
 }
 
-const fetchPan115 = async () => {
+const fetchPan115 = async (forceRefresh = false) => {
+  nullbrTried.value = true
   const cachedList = readPan115Cache()
-  if (cachedList && cachedList.length > 0) {
+  if (!forceRefresh && cachedList && cachedList.length > 0) {
     pan115Resources.value = cachedList
     pansouTried.value = cachedList.some((item) => item?.source_service === 'pansou')
     hdhiveTried.value = cachedList.some((item) => item?.source_service === 'hdhive')
@@ -965,7 +1011,7 @@ const fetchPan115 = async () => {
   }
 
   try {
-    const { data } = await searchApi.getTvPan115(route.params.id)
+    const { data } = await searchApi.getTvPan115(route.params.id, 1, forceRefresh)
     const nullbrList = Array.isArray(data.list) ? data.list : []
     const cachedPansouList = pan115Resources.value.filter((item) => item?.source_service === 'pansou')
     const cachedHdhiveList = pan115Resources.value.filter((item) => item?.source_service === 'hdhive')
@@ -1066,6 +1112,7 @@ const handleFetchTgPan115 = async () => {
 }
 
 const fetchMagnet = async () => {
+  nullbrMagnetTried.value = true
   magnetLoading.value = true
   try {
     const { data } = await searchApi.getTvMagnet(route.params.id, selectedSeason.value)
@@ -1155,6 +1202,7 @@ const pollSeedhubMagnetTask = async (taskId) => {
 }
 
 const fetchEd2k = async () => {
+  ed2kTried.value = true
   ed2kLoading.value = true
   try {
     const { data } = await searchApi.getTvEd2k(route.params.id, selectedSeason.value)
@@ -1169,11 +1217,10 @@ const fetchEd2k = async () => {
 const handleSeasonChange = () => {
   magnetSourceTab.value = 'nullbr'
   magnetResources.value = []
+  nullbrMagnetTried.value = false
   ed2kResources.value = []
+  ed2kTried.value = false
   seedhubMagnetTried.value = false
-
-  if (activeTab.value === 'magnet') fetchMagnet()
-  else if (activeTab.value === 'ed2k') fetchEd2k()
 }
 
 const handleSubscribe = async () => {
@@ -1522,16 +1569,6 @@ const handleSaveEd2k = async (item) => {
   }
 }
 
-watch(activeTab, (tab) => {
-  if (tab === 'pan115' && pan115Resources.value.length === 0) {
-    fetchPan115()
-  } else if (tab === 'magnet' && magnetResources.value.length === 0) {
-    fetchMagnet()
-  } else if (tab === 'ed2k' && ed2kResources.value.length === 0) {
-    fetchEd2k()
-  }
-})
-
 watch(magnetSourceTab, (tab) => {
   if (tab === 'seedhub' && seedhubMagnetResources.value.length === 0 && !seedhubMagnetLoading.value) {
     handleFetchSeedhubMagnet()
@@ -1559,24 +1596,25 @@ watch(() => route.params.id, () => {
   magnetSourceTab.value = 'nullbr'
   pan115Resources.value = []
   pan115Pager.value = { nullbr: 1, pansou: 1, hdhive: 1, tg: 1 }
+  nullbrTried.value = false
   pansouTried.value = false
   pansouLoading.value = false
   hdhiveTried.value = false
   hdhiveLoading.value = false
   tgTried.value = false
   tgLoading.value = false
+  nullbrMagnetTried.value = false
   seedhubMagnetTried.value = false
   seedhubMagnetLoading.value = false
   magnetResources.value = []
+  ed2kTried.value = false
   ed2kResources.value = []
   fetchTv()
-  fetchPan115()
   checkSubscribed()
 })
 
 onMounted(() => {
   fetchTv()
-  fetchPan115()
   checkSubscribed()
 })
 
