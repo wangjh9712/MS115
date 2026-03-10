@@ -1034,8 +1034,10 @@ import { ref, onMounted, onBeforeUnmount, reactive, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { authApi, pan115Api, pansouApi, settingsApi, subscriptionApi } from '@/api'
 import { resetAuthSessionCache } from '@/router'
+import { useRouter } from 'vue-router'
 import { formatBeijingTableCell } from '@/utils/timezone'
 
+const router = useRouter()
 const activeSettingsTab = ref('pan115')
 const accountForm = ref({
   username: 'admin',
@@ -2464,12 +2466,13 @@ const handleSaveAccount = async () => {
       current_password: currentPassword,
       ...(newPassword ? { new_password: newPassword } : {})
     })
+    await authApi.logout().catch(() => {})
     resetAuthSessionCache()
     accountForm.value.currentPassword = ''
     accountForm.value.newPassword = ''
     accountForm.value.confirmPassword = ''
-    ElMessage.success('账号设置已更新')
-    await fetchAuthSession()
+    ElMessage.success('账号设置已更新，请重新登录')
+    await router.replace('/login')
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '账号设置保存失败')
   } finally {
