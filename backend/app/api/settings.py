@@ -2,8 +2,9 @@ import asyncio
 import base64
 import io
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -30,6 +31,9 @@ except Exception:
 
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+PROXY_HEALTH_TG_TARGET = "https://api.telegram.org"
+PROXY_HEALTH_TIMEOUT_SECONDS = 5.0
 
 
 class RuntimeSettingsRequest(BaseModel):
@@ -402,119 +406,96 @@ async def get_proxy_config():
 
 @router.get("/health/all")
 async def check_all_services_health():
-    """统一检查所有服务的健康状态"""
-    results = {
-        "nullbr": {"checking": True},
-        "hdhive": {"checking": True},
-        "tg": {"checking": True},
-        "tmdb": {"checking": True},
-        "pansou": {"checking": True},
-        "emby": {"checking": True},
-    }
+    """检查代理相关目标地址的连通状态。"""
 
-    # 检查 Nullbr
-    try:
-        nullbr_info = await asyncio.to_thread(nullbr_service.get_user_info)
-        results["nullbr"] = {
-            "valid": True,
-            "message": "Nullbr 凭证可用",
-            "user": nullbr_info,
-        }
-    except Exception as exc:
-        results["nullbr"] = {
-            "valid": False,
-            "message": str(exc),
-            "user": None,
-        }
+    async def _check_target(service_key: str, target: str, configured: bool) -> tuple[str, dict]:
+        normalized_target = str(target or "").strip()
+        if not configured or not normalized_target:
+            return service_key, {
+                "status": "not_configured",
+                "valid": False,
+                "message": "未配置 Base URL",
+                "target": "",
+            }
 
-    # 检查 HDHive
-    try:
-        hdhive_info = await hdhive_service.get_user_info()
-        results["hdhive"] = {
-            "valid": True,
-            "message": "HDHive 凭证可用",
-            "user": hdhive_info,
+        scheme = str(urlparse(normalized_target).scheme or "https").lower()
+        proxy_url = proxy_manager.get_proxy_for_scheme(scheme)
+        client_kwargs: dict[str, object] = {
+            "timeout": PROXY_HEALTH_TIMEOUT_SECONDS,
+            "follow_redirects": True,
         }
-    except Exception as exc:
-        results["hdhive"] = {
-            "valid": False,
-            "message": str(exc),
-            "user": None,
-        }
+        if proxy_url:
+            client_kwargs["proxy"] = proxy_url
 
-    # 检查 Telegram
-    try:
-        tg_payload = await tg_service.check_connection()
-        tg_authorized = bool(tg_payload.get("authorized"))
-        results["tg"] = {
-            "valid": tg_authorized,
-            "message": str(tg_payload.get("message") or ("Telegram 凭证可用" if tg_authorized else "Telegram 未登录")),
-            "user": tg_payload.get("user"),
-            "channels": tg_payload.get("channels") or [],
-        }
-    except Exception as exc:
-        results["tg"] = {
-            "valid": False,
-            "message": str(exc),
-            "user": None,
-            "channels": [],
-        }
+        client = httpx.AsyncClient(**client_kwargs)
+        try:
+            response = await client.get(normalized_target)
+            return service_key, {
+                "status": "ok",
+                "valid": True,
+                "message": f"连接正常 (HTTP {response.status_code})",
+                "target": normalized_target,
+            }
+        except httpx.TimeoutException:
+            return service_key, {
+                "status": "error",
+                "valid": False,
+                "message": "连接超时",
+                "target": normalized_target,
+            }
+        except httpx.ConnectError as exc:
+            return service_key, {
+                "status": "error",
+                "valid": False,
+                "message": str(exc) or "连接失败",
+                "target": normalized_target,
+            }
+        except httpx.HTTPError as exc:
+            return service_key, {
+                "status": "error",
+                "valid": False,
+                "message": str(exc) or "请求失败",
+                "target": normalized_target,
+            }
+        except Exception as exc:
+            return service_key, {
+                "status": "error",
+                "valid": False,
+                "message": str(exc) or "未知错误",
+                "target": normalized_target,
+            }
+        finally:
+            await client.aclose()
 
-    # 检查 TMDB
-    try:
-        tmdb_result = await tmdb_service.search_multi("Inception", page=1)
-        tmdb_items = tmdb_result.get("items", [])
-        results["tmdb"] = {
-            "valid": True,
-            "message": "TMDB API 配置可用",
-            "search_results_count": len(tmdb_items),
-        }
-    except Exception as exc:
-        results["tmdb"] = {
-            "valid": False,
-            "message": str(exc),
-            "search_results_count": 0,
-        }
+    checks = [
+        _check_target(
+            "nullbr",
+            runtime_settings_service.get_nullbr_base_url(),
+            bool(str(runtime_settings_service.get_nullbr_base_url() or "").strip()),
+        ),
+        _check_target(
+            "hdhive",
+            runtime_settings_service.get_hdhive_base_url(),
+            bool(str(runtime_settings_service.get_hdhive_base_url() or "").strip()),
+        ),
+        _check_target(
+            "tmdb",
+            runtime_settings_service.get_tmdb_base_url(),
+            bool(str(runtime_settings_service.get_tmdb_base_url() or "").strip()),
+        ),
+        _check_target("tg", PROXY_HEALTH_TG_TARGET, True),
+    ]
 
-    # 检查 Pansou
-    try:
-        pansou_health = await pansou_service.health_check()
-        pansou_healthy = pansou_health.get("status") == "healthy"
-        results["pansou"] = {
-            "valid": pansou_healthy,
-            "message": "Pansou 服务可用" if pansou_healthy else f"Pansou 服务异常",
-            "health": pansou_health,
-        }
-    except Exception as exc:
-        results["pansou"] = {
-            "valid": False,
-            "message": str(exc),
-            "health": None,
-        }
-
-    # 检查 Emby
-    try:
-        emby_payload = await emby_service.check_connection()
-        results["emby"] = {
-            "valid": bool(emby_payload.get("valid")),
-            "message": str(emby_payload.get("message") or ""),
-            "user": emby_payload.get("user"),
-        }
-    except Exception as exc:
-        results["emby"] = {
-            "valid": False,
-            "message": str(exc),
-            "user": None,
-        }
-
-    # 计算整体状态
-    all_valid = all(r.get("valid") for r in results.values())
-    valid_count = sum(1 for r in results.values() if r.get("valid"))
+    results = dict(await asyncio.gather(*checks))
+    checked_results = [result for result in results.values() if result.get("status") != "not_configured"]
+    valid_count = sum(1 for result in checked_results if result.get("valid"))
+    total_count = len(checked_results)
+    all_valid = total_count > 0 and valid_count == total_count
 
     return {
         "all_valid": all_valid,
         "valid_count": valid_count,
-        "total_count": len(results),
+        "total_count": total_count,
         "services": results,
         "proxy": await get_proxy_config(),
     }

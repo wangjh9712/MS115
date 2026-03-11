@@ -691,7 +691,7 @@
               代理配置说明
             </template>
             <template #default>
-              配置代理后，所有外部服务请求（TMDB、HDHive、Nullbr、Pansou）都将通过代理访问。保存时会自动写入后端 .env 文件，不存在时会自动创建。
+              配置代理后，可用于检测 TMDB、HDHive、Nullbr、Telegram 这些目标地址的连通性。保存时会自动写入后端 .env 文件，不存在时会自动创建。
             </template>
           </el-alert>
 
@@ -745,8 +745,8 @@
                 <el-card shadow="never" class="service-card">
                   <div class="service-header">
                     <span class="service-name">{{ serviceNameMap[key] || key }}</span>
-                    <el-tag :type="service.valid ? 'success' : 'danger'" size="small">
-                      {{ service.valid ? '正常' : '异常' }}
+                    <el-tag :type="getHealthStatusTagType(service)" size="small">
+                      {{ getHealthStatusText(service) }}
                     </el-tag>
                   </div>
                   <div class="service-message">{{ service.message }}</div>
@@ -1165,9 +1165,7 @@ const serviceNameMap = {
   nullbr: 'Nullbr',
   hdhive: 'HDHive',
   tg: 'Telegram',
-  tmdb: 'TMDB',
-  pansou: 'Pansou',
-  emby: 'Emby'
+  tmdb: 'TMDB'
 }
 const savingProxy = ref(false)
 const testingProxy = ref(false)
@@ -1706,6 +1704,28 @@ const fetchHealthStatus = async () => {
   }
 }
 
+const getHealthStatusTagType = (service) => {
+  const status = String(service?.status || '').trim().toLowerCase()
+  if (status === 'ok') {
+    return 'success'
+  }
+  if (status === 'not_configured') {
+    return 'info'
+  }
+  return 'danger'
+}
+
+const getHealthStatusText = (service) => {
+  const status = String(service?.status || '').trim().toLowerCase()
+  if (status === 'ok') {
+    return '正常'
+  }
+  if (status === 'not_configured') {
+    return '未配置'
+  }
+  return '异常'
+}
+
 const handleSaveProxy = async () => {
   savingProxy.value = true
   try {
@@ -1730,10 +1750,15 @@ const handleTestProxy = async () => {
     await fetchHealthStatus()
     const validCount = healthStatus.value.validCount
     const totalCount = healthStatus.value.totalCount
-    if (validCount === totalCount) {
-      ElMessage.success(`所有服务连接正常 (${validCount}/${totalCount})`)
+    const notConfiguredCount = Object.values(healthStatus.value.services || {}).filter(
+      service => String(service?.status || '').trim().toLowerCase() === 'not_configured'
+    ).length
+    if (totalCount > 0 && validCount === totalCount) {
+      ElMessage.success(`已配置服务连接正常 (${validCount}/${totalCount})，${notConfiguredCount} 项未配置`)
+    } else if (totalCount === 0) {
+      ElMessage.warning(`暂无已配置的可检测服务，${notConfiguredCount} 项未配置`)
     } else {
-      ElMessage.warning(`部分服务连接异常 (${validCount}/${totalCount} 正常)`)
+      ElMessage.warning(`部分服务连接异常 (${validCount}/${totalCount} 正常)，${notConfiguredCount} 项未配置`)
     }
   } catch (error) {
     ElMessage.error('服务状态检测失败')
