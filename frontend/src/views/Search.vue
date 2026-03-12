@@ -554,8 +554,8 @@ const EXPLORE_HERO_POSTER_COUNT = 6
 const HOME_SECTION_PREFETCH_ROUNDS = EXPLORE_SPEED_MODE === 'extreme' ? 3 : 1
 const HOME_SECTION_PREFETCH_DELAY_MS = EXPLORE_SPEED_MODE === 'extreme' ? 12 : 36
 const HOME_SECTION_CACHE_TTL_MS = 5 * 60 * 1000
-const HOME_CARD_MIN_WIDTH = 116
-const HOME_CARD_MAX_WIDTH = 176
+const HOME_CARD_MIN_WIDTH = 150
+const HOME_CARD_MAX_WIDTH = 210
 const HOME_CARD_MIN_PER_VIEW = 2
 const HOME_CARD_MAX_PER_VIEW = 9
 let sectionResizeObserver = null
@@ -2200,19 +2200,6 @@ onBeforeUnmount(() => {
           gap: 10px;
         }
 
-        .recommend-card {
-          width: clamp(96px, calc((100vw - 72px) / 2.5), 132px);
-          min-width: clamp(96px, calc((100vw - 72px) / 2.5), 132px);
-
-          .card-info {
-            padding: 9px 9px 11px;
-
-            .title {
-              font-size: 11px;
-              -webkit-line-clamp: 1;
-            }
-          }
-        }
       }
     }
 
