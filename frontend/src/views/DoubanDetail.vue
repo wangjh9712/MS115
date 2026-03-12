@@ -556,6 +556,7 @@ const tgPan115Resources = computed(() =>
   pan115Resources.value.filter((item) => item?.source_service === 'tg')
 )
 const pan115PageSize = 10
+const seedhubFetchLimit = 40
 const pan115Pager = ref({
   nullbr: 1,
   pansou: 1,
@@ -1083,8 +1084,8 @@ const fetchSeedhubMagnet = async () => {
   try {
     if (mappedTmdbId.value) {
       const request = mediaType.value === 'tv'
-        ? searchApi.getTvMagnetSeedhub(mappedTmdbId.value, pan115PageSize)
-        : searchApi.getMovieMagnetSeedhub(mappedTmdbId.value, pan115PageSize)
+        ? searchApi.getTvMagnetSeedhub(mappedTmdbId.value, seedhubFetchLimit)
+        : searchApi.getMovieMagnetSeedhub(mappedTmdbId.value, seedhubFetchLimit)
       const { data } = await request
       const rows = Array.isArray(data?.list) ? data.list : []
       const normalizedRows = rows.map((item) => ({ ...item, source_service: item?.source_service || 'seedhub' }))
@@ -1098,7 +1099,7 @@ const fetchSeedhubMagnet = async () => {
     const keywords = buildPansouKeywords()
     let merged = magnetResources.value.slice()
     for (const keyword of keywords) {
-      const { data } = await searchApi.getSeedhubMagnetByKeyword(keyword, mediaType.value, pan115PageSize)
+      const { data } = await searchApi.getSeedhubMagnetByKeyword(keyword, mediaType.value, seedhubFetchLimit)
       const rows = Array.isArray(data?.list) ? data.list : []
       const normalizedRows = rows.map((item) => ({ ...item, source_service: item?.source_service || 'seedhub' }))
       merged = mergeMagnetResources(merged, normalizedRows)

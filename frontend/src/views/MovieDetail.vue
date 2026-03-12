@@ -730,6 +730,7 @@ const tgPan115Resources = computed(() =>
   pan115Resources.value.filter((item) => item?.source_service === 'tg')
 )
 const pan115PageSize = 10
+const seedhubFetchLimit = 40
 const pan115Pager = ref({
   nullbr: 1,
   pansou: 1,
@@ -1187,7 +1188,7 @@ const handleFetchSeedhubMagnet = async () => {
   magnetPager.value.seedhub = 1
 
   try {
-    const { data } = await searchApi.getMovieMagnetSeedhub(route.params.id, pan115PageSize)
+    const { data } = await searchApi.getMovieMagnetSeedhub(route.params.id, seedhubFetchLimit)
     const seedhubList = Array.isArray(data?.list) ? data.list : []
     const markedSeedhubList = seedhubList.map((item) => ({ ...item, source_service: item?.source_service || 'seedhub' }))
     magnetResources.value = mergeMagnetResources(magnetResources.value, markedSeedhubList)
