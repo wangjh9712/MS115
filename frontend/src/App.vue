@@ -728,6 +728,22 @@ html, body, #app {
 }
 
 @media (max-width: 1024px) {
+  .mobile-topbar {
+    flex-wrap: wrap;
+
+    .mobile-brand {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    .mobile-theme-mode {
+      margin-left: 0;
+      width: 100%;
+      display: flex;
+      justify-content: flex-end;
+    }
+  }
+
   .app-main {
     padding: 20px;
 
@@ -748,22 +764,37 @@ html, body, #app {
     gap: 8px;
     padding: 8px 10px;
 
+    .menu-toggle {
+      padding-inline: 0;
+    }
+
     .mobile-brand {
       font-size: 15px;
-      max-width: 152px;
+      max-width: none;
       overflow: hidden;
-      text-overflow: ellipsis;
 
       .mobile-brand-icon {
         width: 28px;
         height: 28px;
       }
+
+      .mobile-brand-text {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
     }
 
     .mobile-theme-mode {
+      justify-content: stretch;
+
+      .el-radio-group {
+        width: 100%;
+      }
+
       .el-radio-button__inner {
         min-width: 40px;
         padding: 6px 6px;
+        width: 100%;
       }
     }
   }

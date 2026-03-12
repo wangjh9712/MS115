@@ -62,6 +62,11 @@
 body {
   background: var(--ms-bg-primary);
   color: var(--ms-text-primary);
+  overflow-x: hidden;
+}
+
+img {
+  max-width: 100%;
 }
 
 ::-webkit-scrollbar {
@@ -251,6 +256,17 @@ body {
   backdrop-filter: blur(10px);
 }
 
+.el-pagination {
+  justify-content: center;
+  row-gap: 8px;
+}
+
+.el-pagination.is-background .btn-prev,
+.el-pagination.is-background .btn-next,
+.el-pagination.is-background .el-pager li {
+  min-width: 32px;
+}
+
 .el-form-item__label,
 .el-descriptions__label,
 .el-descriptions__content,
@@ -308,4 +324,69 @@ body {
 
 .animate-fade-in {
   animation: fadeIn 0.42s ease forwards;
+}
+
+@media (max-width: 1024px) {
+  .el-tabs .el-tabs__header {
+    margin-bottom: 12px;
+  }
+
+  .el-tabs .el-tabs__nav-wrap {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .el-tabs .el-tabs__nav-wrap::-webkit-scrollbar {
+    display: none;
+  }
+
+  .el-tabs .el-tabs__nav {
+    flex-wrap: nowrap;
+  }
+
+  .el-tabs .el-tabs__item {
+    padding-inline: 14px;
+    white-space: nowrap;
+  }
+
+  .el-dialog {
+    width: min(92vw, 720px) !important;
+    margin-top: 6vh !important;
+  }
+
+  .el-drawer {
+    max-width: 100vw;
+  }
+}
+
+@media (max-width: 768px) {
+  .el-button + .el-button {
+    margin-left: 8px;
+  }
+
+  .el-button {
+    min-height: 36px;
+    padding-inline: 14px;
+  }
+
+  .el-tabs .el-tabs__item {
+    padding-inline: 12px;
+    font-size: 13px;
+  }
+
+  .el-pagination {
+    width: 100%;
+  }
+
+  .el-pagination .el-pager {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+  }
+
+  .el-message-box,
+  .el-dialog {
+    width: min(94vw, 560px) !important;
+  }
 }

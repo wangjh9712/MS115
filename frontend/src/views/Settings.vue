@@ -2912,6 +2912,14 @@ onBeforeUnmount(() => {
     :deep(.el-tabs__content) {
       padding-top: 14px;
     }
+
+    :deep(.el-tabs__nav-wrap) {
+      scrollbar-width: none;
+    }
+
+    :deep(.el-tabs__nav-wrap::-webkit-scrollbar) {
+      display: none;
+    }
   }
 
   h2 {
@@ -2954,6 +2962,7 @@ onBeforeUnmount(() => {
       display: flex;
       align-items: center;
       gap: 8px;
+      flex-wrap: wrap;
     }
 
     .pan115-qr-preview,
@@ -3205,12 +3214,45 @@ onBeforeUnmount(() => {
     .priority-actions-row {
       margin-top: 8px;
     }
+
+    :deep(.el-form-item__content) {
+      min-width: 0;
+    }
   }
 }
 
 @media (max-width: 900px) {
   .settings-page {
+    h2 {
+      margin-bottom: 18px;
+      font-size: 24px;
+    }
+
+    .settings-tabs {
+      :deep(.el-tabs__item) {
+        font-size: 13px;
+      }
+    }
+
     .settings-card {
+      .card-header,
+      .pan115-qr-status,
+      .priority-item,
+      .priority-item-left {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .priority-actions {
+        width: 100%;
+        justify-content: flex-end;
+      }
+
+      .tg-link {
+        margin-left: 0;
+        margin-top: 8px;
+      }
+
       .default-folder-section {
         .folder-selector {
           flex-direction: column;
@@ -3219,6 +3261,66 @@ onBeforeUnmount(() => {
           .default-folder-select {
             min-width: 100%;
           }
+        }
+      }
+
+      :deep(.el-form-item) {
+        display: block;
+      }
+
+      :deep(.el-form-item__label) {
+        display: block;
+        width: auto !important;
+        margin-bottom: 8px;
+        line-height: 1.5;
+        text-align: left;
+      }
+
+      :deep(.el-form-item__content) {
+        margin-left: 0 !important;
+      }
+
+      :deep(.el-card__header),
+      :deep(.el-card__body) {
+        padding-inline: 16px;
+      }
+
+      :deep(.el-table) {
+        display: block;
+        overflow-x: auto;
+      }
+
+      :deep(.el-table__inner-wrapper) {
+        min-width: 720px;
+      }
+    }
+  }
+}
+
+@media (max-width: 768px) {
+  .settings-page {
+    .settings-card {
+      .pan115-qr-preview,
+      .pan115-qr-placeholder,
+      .tg-qr-preview {
+        width: min(220px, 100%);
+        height: auto;
+        min-height: 180px;
+      }
+
+      .pan115-qr-actions {
+        width: 100%;
+
+        .el-button {
+          flex: 1 1 100%;
+          margin-left: 0;
+        }
+      }
+
+      .health-status {
+        :deep(.el-col) {
+          max-width: 100%;
+          flex: 0 0 100%;
         }
       }
     }

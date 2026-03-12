@@ -1654,7 +1654,7 @@ onMounted(async () => {
 
 <style scoped lang="scss">
 .douban-detail-page {
-  padding: 20px;
+  padding: 8px;
 
   .detail-header {
     display: flex;
@@ -1761,6 +1761,20 @@ onMounted(async () => {
 
   .resource-tools {
     margin-bottom: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .resource-tabs {
+    background: var(--ms-gradient-card);
+    border: 1px solid var(--ms-glass-border);
+    border-radius: 16px;
+    padding: 20px;
+
+    :deep(.el-tabs__content) {
+      padding-top: 12px;
+    }
   }
 
   .table-pagination {
@@ -1826,12 +1840,79 @@ onMounted(async () => {
   }
 }
 
-@media (max-width: 900px) {
-  .douban-detail-page .detail-header {
-    flex-direction: column;
+@media (max-width: 1024px) {
+  .douban-detail-page {
+    padding: 0;
 
-    .poster {
-      width: 170px;
+    .detail-header {
+      gap: 18px;
+
+      .poster {
+        width: 190px;
+      }
+
+      .info {
+        .title {
+          font-size: 26px;
+        }
+
+        .meta,
+        .actions {
+          flex-wrap: wrap;
+        }
+      }
+    }
+
+    .resource-tabs {
+      padding: 16px;
+    }
+
+    .table-pagination {
+      justify-content: center;
+    }
+  }
+}
+
+@media (max-width: 900px) {
+  .douban-detail-page {
+    .detail-header {
+      flex-direction: column;
+
+      .poster {
+        width: min(200px, 58vw);
+        margin: 0 auto;
+      }
+
+      .info {
+        .title {
+          font-size: 24px;
+        }
+
+        .meta {
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+
+        .actions {
+          .el-button {
+            flex: 1 1 100%;
+            margin-left: 0;
+          }
+        }
+      }
+    }
+
+    .resource-tabs {
+      padding: 14px;
+    }
+
+    :deep(.resource-table) {
+      display: block;
+      overflow-x: auto;
+
+      .el-table__inner-wrapper {
+        min-width: 700px;
+      }
     }
   }
 }

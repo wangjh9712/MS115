@@ -1950,6 +1950,114 @@ onMounted(() => {
 
 }
 
+@media (max-width: 1024px) {
+  .tv-detail-page {
+    .detail-header {
+      gap: 24px;
+      padding: 22px;
+
+      .poster {
+        width: 190px;
+      }
+
+      .info {
+        .title {
+          font-size: 28px;
+        }
+
+        .meta,
+        .actions,
+        .external-links {
+          flex-wrap: wrap;
+        }
+      }
+    }
+
+    .season-selector {
+      :deep(.el-select) {
+        width: min(240px, 100%);
+      }
+    }
+
+    .resource-tabs {
+      padding: 16px;
+    }
+
+    .table-pagination {
+      justify-content: center;
+    }
+  }
+}
+
+@media (max-width: 768px) {
+  .tv-detail-page {
+    .detail-header {
+      flex-direction: column;
+      gap: 18px;
+      margin-bottom: 20px;
+      padding: 16px;
+
+      .poster {
+        width: min(220px, 62vw);
+        margin: 0 auto;
+      }
+
+      .info {
+        .title {
+          font-size: 24px;
+        }
+
+        .meta {
+          gap: 10px;
+        }
+
+        .overview {
+          max-height: none;
+          padding-right: 0;
+        }
+
+        .actions {
+          width: 100%;
+
+          .el-button {
+            flex: 1 1 100%;
+            margin-left: 0;
+          }
+        }
+
+        .external-links {
+          align-items: flex-start;
+        }
+      }
+    }
+
+    .season-selector {
+      margin-bottom: 18px;
+
+      :deep(.el-select) {
+        width: 100%;
+      }
+    }
+
+    .resource-tabs {
+      padding: 14px;
+    }
+
+    .resource-tools {
+      flex-wrap: wrap;
+    }
+
+    .resource-table {
+      display: block;
+      overflow-x: auto;
+
+      :deep(.el-table__inner-wrapper) {
+        min-width: 720px;
+      }
+    }
+  }
+}
+
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
