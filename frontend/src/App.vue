@@ -762,14 +762,22 @@ html, body, #app {
 
 @media (max-width: 768px) {
   .mobile-topbar {
+    align-items: flex-start;
+    min-height: auto;
     gap: 8px;
-    padding: 8px 10px;
+    row-gap: 10px;
+    padding: 10px;
 
     .menu-toggle {
+      flex: 0 0 auto;
       padding-inline: 0;
+      min-width: 32px;
+      min-height: 32px;
     }
 
     .mobile-brand {
+      flex: 1 1 0;
+      align-items: center;
       font-size: 15px;
       max-width: none;
       overflow: hidden;
@@ -786,16 +794,21 @@ html, body, #app {
     }
 
     .mobile-theme-mode {
+      flex: 0 0 100%;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
       justify-content: stretch;
+      gap: 0;
 
-      .el-radio-group {
+      :deep(.el-radio-button) {
         width: 100%;
       }
 
-      .el-radio-button__inner {
-        min-width: 40px;
-        padding: 6px 6px;
+      :deep(.el-radio-button__inner) {
         width: 100%;
+        min-width: 40px;
+        padding: 7px 4px;
+        text-align: center;
       }
     }
   }
