@@ -2,40 +2,73 @@ import re
 import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import unquote, urlencode, urlparse
 from uuid import uuid4
 
 from app.core.config import settings
+from app.utils.proxy import proxy_manager
 
-try:
-    from telethon import TelegramClient
-    from telethon.errors import (
-        ChannelPrivateError,
-        FloodWaitError,
-        PhoneCodeExpiredError,
-        PhoneCodeInvalidError,
-        SessionPasswordNeededError,
-        UsernameInvalidError,
-        UsernameNotOccupiedError,
-    )
-    from telethon.sessions import StringSession
-    from telethon.tl.types import MessageEntityTextUrl
+TELETHON_AVAILABLE = False
+TELETHON_IMPORT_ERROR = ""
+TelegramClient = None
+StringSession = None
+MessageEntityTextUrl = object
+SessionPasswordNeededError = Exception
+PhoneCodeInvalidError = Exception
+PhoneCodeExpiredError = Exception
+FloodWaitError = Exception
+UsernameInvalidError = Exception
+UsernameNotOccupiedError = Exception
+ChannelPrivateError = Exception
 
+
+def _load_telethon() -> None:
+    global TELETHON_AVAILABLE
+    global TELETHON_IMPORT_ERROR
+    global TelegramClient
+    global StringSession
+    global MessageEntityTextUrl
+    global SessionPasswordNeededError
+    global PhoneCodeInvalidError
+    global PhoneCodeExpiredError
+    global FloodWaitError
+    global UsernameInvalidError
+    global UsernameNotOccupiedError
+    global ChannelPrivateError
+
+    if TELETHON_AVAILABLE:
+        return
+    if TELETHON_IMPORT_ERROR:
+        raise RuntimeError(f"Telethon 未安装或加载失败: {TELETHON_IMPORT_ERROR}")
+
+    try:
+        from telethon import TelegramClient as telethon_client
+        from telethon.errors import (
+            ChannelPrivateError as telethon_channel_private_error,
+            FloodWaitError as telethon_flood_wait_error,
+            PhoneCodeExpiredError as telethon_phone_code_expired_error,
+            PhoneCodeInvalidError as telethon_phone_code_invalid_error,
+            SessionPasswordNeededError as telethon_session_password_needed_error,
+            UsernameInvalidError as telethon_username_invalid_error,
+            UsernameNotOccupiedError as telethon_username_not_occupied_error,
+        )
+        from telethon.sessions import StringSession as telethon_string_session
+        from telethon.tl.types import MessageEntityTextUrl as telethon_message_entity_text_url
+    except Exception as exc:  # pragma: no cover - runtime fallback
+        TELETHON_IMPORT_ERROR = str(exc)
+        raise RuntimeError(f"Telethon 未安装或加载失败: {TELETHON_IMPORT_ERROR}") from exc
+
+    TelegramClient = telethon_client
+    StringSession = telethon_string_session
+    MessageEntityTextUrl = telethon_message_entity_text_url
+    SessionPasswordNeededError = telethon_session_password_needed_error
+    PhoneCodeInvalidError = telethon_phone_code_invalid_error
+    PhoneCodeExpiredError = telethon_phone_code_expired_error
+    FloodWaitError = telethon_flood_wait_error
+    UsernameInvalidError = telethon_username_invalid_error
+    UsernameNotOccupiedError = telethon_username_not_occupied_error
+    ChannelPrivateError = telethon_channel_private_error
     TELETHON_AVAILABLE = True
-    TELETHON_IMPORT_ERROR = ""
-except Exception as exc:  # pragma: no cover - runtime fallback
-    TELETHON_AVAILABLE = False
-    TELETHON_IMPORT_ERROR = str(exc)
-    TelegramClient = None  # type: ignore[assignment]
-    StringSession = None  # type: ignore[assignment]
-    MessageEntityTextUrl = object  # type: ignore[assignment]
-    SessionPasswordNeededError = Exception  # type: ignore[assignment]
-    PhoneCodeInvalidError = Exception  # type: ignore[assignment]
-    PhoneCodeExpiredError = Exception  # type: ignore[assignment]
-    FloodWaitError = Exception  # type: ignore[assignment]
-    UsernameInvalidError = Exception  # type: ignore[assignment]
-    UsernameNotOccupiedError = Exception  # type: ignore[assignment]
-    ChannelPrivateError = Exception  # type: ignore[assignment]
 
 
 _PAN115_SHARE_URL_PATTERN = re.compile(
@@ -58,7 +91,6 @@ class TgService:
         self._api_hash = str(settings.TG_API_HASH or "").strip()
         self._phone = str(settings.TG_PHONE or "").strip()
         self._session = str(settings.TG_SESSION or "").strip()
-        self._proxy = str(settings.TG_PROXY or "").strip()
         self._channels = self._parse_channels(settings.TG_CHANNEL_USERNAMES)
         self._search_days = max(1, int(settings.TG_SEARCH_DAYS or 30))
         self._max_messages = max(20, int(settings.TG_MAX_MESSAGES_PER_CHANNEL or 200))
@@ -91,26 +123,38 @@ class TgService:
         return normalized
 
     @staticmethod
-    def _build_proxy(proxy_value: str) -> tuple[str, str, int] | None:
+    def _build_proxy(proxy_value: str) -> tuple[Any, ...] | None:
         value = str(proxy_value or "").strip()
         if not value:
             return None
-        # formats:
-        # 1) socks5://host:port
-        # 2) host:port
-        if value.startswith("socks5://"):
-            value = value[len("socks5://") :]
-        if ":" not in value:
+
+        if "://" not in value:
+            value = f"socks5://{value}"
+
+        parsed = urlparse(value)
+        scheme = str(parsed.scheme or "").strip().lower()
+        host = str(parsed.hostname or "").strip()
+        port = parsed.port
+        if scheme == "socks":
+            scheme = "socks5"
+        if scheme not in {"socks5", "socks4", "http", "https"}:
             return None
-        host, port_text = value.rsplit(":", 1)
-        try:
-            port = int(port_text)
-        except Exception:
+        if not host or port is None:
             return None
-        host = host.strip()
-        if not host:
-            return None
-        return ("socks5", host, port)
+
+        username = unquote(parsed.username) if parsed.username else None
+        password = unquote(parsed.password) if parsed.password else None
+        if username is not None or password is not None:
+            return (scheme, host, int(port), True, username, password)
+        return (scheme, host, int(port))
+
+    def _resolve_proxy(self) -> tuple[Any, ...] | None:
+        for scheme in ("socks5", "https", "http"):
+            fallback_proxy = proxy_manager.get_proxy_for_scheme(scheme)
+            parsed_proxy = self._build_proxy(str(fallback_proxy or ""))
+            if parsed_proxy:
+                return parsed_proxy
+        return None
 
     def set_config(
         self,
@@ -119,7 +163,6 @@ class TgService:
         api_hash: str | None = None,
         phone: str | None = None,
         session: str | None = None,
-        proxy: str | None = None,
         channels: list[str] | str | None = None,
         search_days: int | None = None,
         max_messages: int | None = None,
@@ -132,8 +175,6 @@ class TgService:
             self._phone = str(phone or "").strip()
         if session is not None:
             self._session = str(session or "").strip()
-        if proxy is not None:
-            self._proxy = str(proxy or "").strip()
         if channels is not None:
             self._channels = self._parse_channels(channels)
         if search_days is not None:
@@ -224,8 +265,7 @@ class TgService:
                 pass
 
     def _ensure_dependency(self) -> None:
-        if not TELETHON_AVAILABLE:
-            raise RuntimeError(f"Telethon 未安装或加载失败: {TELETHON_IMPORT_ERROR}")
+        _load_telethon()
 
     def _ensure_login_config(self) -> None:
         self._ensure_dependency()
@@ -242,7 +282,7 @@ class TgService:
     def _build_client(self, session_value: str) -> "TelegramClient":
         self._ensure_login_config()
         api_id = int(str(self._api_id).strip())
-        proxy = self._build_proxy(self._proxy)
+        proxy = self._resolve_proxy()
         return TelegramClient(
             StringSession(session_value),
             api_id=api_id,

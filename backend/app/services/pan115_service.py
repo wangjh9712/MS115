@@ -2,15 +2,52 @@
 115网盘服务模块 - 基于p115client实现
 提供115网盘的文件管理、离线下载、分享链接转存等功能
 """
-from p115client import P115Client, check_response
-from p115client.util import share_extract_payload
-from app.core.config import settings
-from typing import Optional, List, Dict, Any, Set
-from datetime import datetime, timedelta, timezone
-from uuid import uuid4
-import re
 import asyncio
 import random
+import re
+from datetime import datetime, timedelta, timezone
+from typing import Optional, List, Dict, Any, Set
+from uuid import uuid4
+
+from app.core.config import settings
+
+P115Client = None
+_P115CLIENT_IMPORT_ERROR = ""
+
+
+def _load_p115client() -> None:
+    global P115Client
+    global _P115CLIENT_IMPORT_ERROR
+    if P115Client is not None:
+        return
+    if _P115CLIENT_IMPORT_ERROR:
+        raise RuntimeError(f"p115client 未安装或加载失败: {_P115CLIENT_IMPORT_ERROR}")
+    try:
+        from p115client import P115Client as p115_client_cls
+        from p115client import check_response as p115_check_response
+        from p115client.util import share_extract_payload as p115_share_extract_payload
+    except Exception as exc:  # pragma: no cover - runtime fallback
+        _P115CLIENT_IMPORT_ERROR = str(exc)
+        raise RuntimeError(f"p115client 未安装或加载失败: {_P115CLIENT_IMPORT_ERROR}") from exc
+
+    P115Client = p115_client_cls
+    globals()["check_response"] = p115_check_response
+    globals()["share_extract_payload"] = p115_share_extract_payload
+
+
+def check_response(result: Any) -> Any:
+    _load_p115client()
+    return globals()["check_response"](result)
+
+
+def share_extract_payload(url: str) -> Any:
+    _load_p115client()
+    return globals()["share_extract_payload"](url)
+
+
+def _get_p115_client_cls() -> Any:
+    _load_p115client()
+    return P115Client
 
 
 class Pan115Service:
@@ -52,15 +89,15 @@ class Pan115Service:
             cookie: 115网盘cookie字符串，如未提供则使用配置文件中的cookie
         """
         self.cookie = cookie or settings.PAN115_COOKIE or ""
-        self._client: Optional[P115Client] = None
+        self._client: Optional[Any] = None
     
     @property
-    def client(self) -> P115Client:
+    def client(self) -> Any:
         """获取或创建p115client实例"""
         if self._client is None:
             if not self.cookie:
                 raise ValueError("115网盘Cookie未配置，请在设置中更新Cookie")
-            self._client = P115Client(self.cookie)
+            self._client = _get_p115_client_cls()(self.cookie)
         return self._client
     
     async def _async_call(self, method_name: str, *args, **kwargs) -> Dict[str, Any]:
@@ -718,7 +755,7 @@ class Pan115Service:
             normalized_app = "alipaymini"
 
         raw_token = await asyncio.wait_for(
-            P115Client.login_qrcode_token(async_=True, timeout=8),
+            _get_p115_client_cls().login_qrcode_token(async_=True, timeout=8),
             timeout=8.5,
         )
         token_payload = self._extract_qr_data(raw_token)
@@ -776,7 +813,7 @@ class Pan115Service:
         if not uid:
             raise RuntimeError("扫码会话缺少uid，无法获取二维码图片")
         image_bytes = await asyncio.wait_for(
-            P115Client.login_qrcode(uid, async_=True, timeout=8),
+            _get_p115_client_cls().login_qrcode(uid, async_=True, timeout=8),
             timeout=8.5,
         )
         if not isinstance(image_bytes, (bytes, bytearray)):
@@ -823,7 +860,7 @@ class Pan115Service:
 
         try:
             status_resp = await asyncio.wait_for(
-                P115Client.login_qrcode_scan_status(
+                _get_p115_client_cls().login_qrcode_scan_status(
                     item.get("scan_payload") or {},
                     async_=True,
                     timeout=8,
@@ -899,7 +936,7 @@ class Pan115Service:
             }
 
         result_resp = await asyncio.wait_for(
-            P115Client.login_qrcode_scan_result(
+            _get_p115_client_cls().login_qrcode_scan_result(
                 str(item.get("uid") or ""),
                 app=str(item.get("app") or "alipaymini"),
                 async_=True,

@@ -2,7 +2,18 @@
 .github
 .venv
 .vscode
+1panel-v2.1.3-linux-amd64
+1panel-v2.1.3-linux-amd64.tar.gz
+README.md
+QWEN.md
+AGENTS.md
+dev-linux.sh
+docker-compose.yml
+docker-compose.single.yml
 backend/.venv-linux3
+backend/.venv
+backend/.venv*
+backend/venv
 backend/.env
 backend/*.log
 backend/*.err.log
@@ -10,6 +21,7 @@ backend/data
 backend/__pycache__
 backend/.pytest_cache
 backend/.mypy_cache
+backend/tests
 frontend/node_modules
 frontend/dist
 frontend/.env.local
