@@ -343,6 +343,7 @@ html, body, #app {
 
 .app-content-container {
   min-width: 0;
+  flex-direction: column;
 }
 
 .app-aside {
