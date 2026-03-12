@@ -1973,11 +1973,11 @@ async def _search_tg_pan115_resources(tmdb_id: int, media_type: str) -> dict[str
     }
 
 
-async def _search_seedhub_magnet_resources(tmdb_id: int, media_type: str, limit: int = 10) -> tuple[str, list[dict]]:
+async def _search_seedhub_magnet_resources(tmdb_id: int, media_type: str, limit: int = 40) -> tuple[str, list[dict]]:
     media_payload = await _load_media_payload(tmdb_id, media_type)
     keyword_candidates = _build_pansou_keyword_candidates(media_payload, media_type, tmdb_id)
     selected_keyword = keyword_candidates[0] if keyword_candidates else f"TMDB {tmdb_id}"
-    normalized_limit = max(1, min(int(limit or 10), 40))
+    normalized_limit = max(1, min(int(limit or 40), 80))
 
     for keyword in keyword_candidates:
         items = await seedhub_service.search_magnets_by_keyword(keyword, limit=normalized_limit)
@@ -2204,7 +2204,7 @@ async def get_movie_pan115_with_tg(
 async def get_movie_magnet(
     tmdb_id: int,
     source: str = Query("nullbr", pattern="^(nullbr|seedhub)$", description="Magnet source"),
-    limit: int = Query(10, ge=1, le=40, description="SeedHub 结果上限"),
+    limit: int = Query(40, ge=1, le=80, description="SeedHub 结果上限"),
 ):
     if source == "seedhub":
         keyword, items = await _search_seedhub_magnet_resources(tmdb_id, "movie", limit=limit)
@@ -2224,7 +2224,7 @@ async def get_movie_magnet(
 @router.get("/movie/{tmdb_id}/magnet/seedhub")
 async def get_movie_magnet_seedhub(
     tmdb_id: int,
-    limit: int = Query(10, ge=1, le=40, description="SeedHub 结果上限"),
+    limit: int = Query(40, ge=1, le=80, description="SeedHub 结果上限"),
 ):
     attempts: list[dict[str, Any]] = []
     keyword = ""
@@ -2538,7 +2538,7 @@ async def get_nullbr_ed2k_by_keyword(
 async def get_seedhub_magnet_by_keyword(
     media_type: str,
     keyword: str = Query(..., min_length=1, description="影视名称关键词"),
-    limit: int = Query(10, ge=1, le=40, description="SeedHub 结果上限"),
+    limit: int = Query(40, ge=1, le=80, description="SeedHub 结果上限"),
 ):
     normalized_media_type = str(media_type or "").strip().lower()
     if normalized_media_type not in {"movie", "tv"}:
@@ -2673,7 +2673,7 @@ async def get_tv_magnet(
     season: Optional[int] = Query(None, description="Season"),
     episode: Optional[int] = Query(None, description="Episode"),
     source: str = Query("nullbr", pattern="^(nullbr|seedhub)$", description="Magnet source"),
-    limit: int = Query(10, ge=1, le=40, description="SeedHub 结果上限"),
+    limit: int = Query(40, ge=1, le=80, description="SeedHub 结果上限"),
 ):
     if source == "seedhub":
         keyword, items = await _search_seedhub_magnet_resources(tmdb_id, "tv", limit=limit)
@@ -2699,7 +2699,7 @@ async def get_tv_magnet(
 @router.get("/tv/{tmdb_id}/magnet/seedhub")
 async def get_tv_magnet_seedhub(
     tmdb_id: int,
-    limit: int = Query(10, ge=1, le=40, description="SeedHub 结果上限"),
+    limit: int = Query(40, ge=1, le=80, description="SeedHub 结果上限"),
 ):
     attempts: list[dict[str, Any]] = []
     keyword = ""

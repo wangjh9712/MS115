@@ -763,7 +763,7 @@ const tgPan115Resources = computed(() =>
   pan115Resources.value.filter((item) => item?.source_service === 'tg')
 )
 const pan115PageSize = 10
-const seedhubFetchLimit = 40
+const seedhubFetchLimit = 80
 const pan115Pager = ref({
   nullbr: 1,
   pansou: 1,
