@@ -587,32 +587,45 @@ onMounted(() => {
     }
 
     .subscriptions-grid {
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 8px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
     }
 
     .subscription-item {
       border-radius: 12px;
 
       .poster {
-        width: calc(100% + 24px);
-        margin: -12px -12px 8px;
+        width: calc(100% + 28px);
+        margin: -14px -14px 10px;
       }
 
       .info {
         .title-row {
-          margin-bottom: 4px;
+          align-items: flex-start;
+          flex-direction: column;
+          margin-bottom: 6px;
+          gap: 6px;
 
           .title {
-            font-size: 12px;
+            font-size: 13px;
             -webkit-line-clamp: 1;
+            width: 100%;
           }
         }
 
         .meta {
-          gap: 6px;
+          gap: 8px;
           margin-bottom: 6px;
-          font-size: 10px;
+          font-size: 11px;
+          flex-wrap: wrap;
+        }
+
+        .actions {
+          .el-button {
+            min-height: 30px;
+            padding: 4px 10px;
+            font-size: 11px;
+          }
         }
       }
     }
