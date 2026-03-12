@@ -101,11 +101,12 @@ export const searchApi = {
     api.get(`/search/nullbr/${mediaType}/magnet/by-keyword`, { params: { keyword, season, episode } }),
   getNullbrEd2kByKeyword: (keyword, mediaType = 'movie', season, episode) =>
     api.get(`/search/nullbr/${mediaType}/ed2k/by-keyword`, { params: { keyword, season, episode } }),
-  getSeedhubMagnetByKeyword: (keyword, mediaType = 'movie') =>
-    api.get(`/search/seedhub/${mediaType}/magnet/by-keyword`, { params: { keyword } }),
+  getSeedhubMagnetByKeyword: (keyword, mediaType = 'movie', limit = 10) =>
+    api.get(`/search/seedhub/${mediaType}/magnet/by-keyword`, { params: { keyword, limit } }),
   unlockHdhiveResource: (slug) => api.post('/search/hdhive/resource/unlock', { slug }),
   getMovieMagnet: (tmdbId) => api.get(`/search/movie/${tmdbId}/magnet`),
-  getMovieMagnetSeedhub: (tmdbId) => api.get(`/search/movie/${tmdbId}/magnet`, { params: { source: 'seedhub' } }),
+  getMovieMagnetSeedhub: (tmdbId, limit = 10) =>
+    api.get(`/search/movie/${tmdbId}/magnet`, { params: { source: 'seedhub', limit } }),
   createMovieSeedhubMagnetTask: (tmdbId, limit = 40, forceRefresh = false) =>
     api.post(`/search/movie/${tmdbId}/magnet/seedhub/tasks`, null, { params: { limit, force_refresh: forceRefresh } }),
   getMovieEd2k: (tmdbId) => api.get(`/search/movie/${tmdbId}/ed2k`),
@@ -130,7 +131,8 @@ export const searchApi = {
   getTvEpisodeVideo: (tmdbId, seasonNumber, episodeNumber) => api.get(`/search/tv/${tmdbId}/season/${seasonNumber}/episode/${episodeNumber}/video`),
 
   getTvMagnet: (tmdbId, season, episode) => api.get(`/search/tv/${tmdbId}/magnet`, { params: { season, episode } }),
-  getTvMagnetSeedhub: (tmdbId) => api.get(`/search/tv/${tmdbId}/magnet`, { params: { source: 'seedhub' } }),
+  getTvMagnetSeedhub: (tmdbId, limit = 10) =>
+    api.get(`/search/tv/${tmdbId}/magnet`, { params: { source: 'seedhub', limit } }),
   createTvSeedhubMagnetTask: (tmdbId, limit = 40, forceRefresh = false) =>
     api.post(`/search/tv/${tmdbId}/magnet/seedhub/tasks`, null, { params: { limit, force_refresh: forceRefresh } }),
   getSeedhubMagnetTask: (taskId) => api.get(`/search/magnet/seedhub/tasks/${taskId}`),

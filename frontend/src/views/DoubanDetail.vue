@@ -332,7 +332,7 @@
                 </el-button>
               </div>
               <div v-loading="magnetLoading">
-                <el-table v-if="nullbrMagnetResources.length" :data="nullbrMagnetResources" stripe class="resource-table">
+                <el-table v-if="nullbrMagnetResources.length" :data="pagedNullbrMagnetResources" stripe class="resource-table">
                   <el-table-column label="资源名称" min-width="380" show-overflow-tooltip>
                     <template #default="{ row }">{{ row.name || '-' }}</template>
                   </el-table-column>
@@ -346,6 +346,16 @@
                     </template>
                   </el-table-column>
                 </el-table>
+                <div v-if="nullbrMagnetResources.length > pan115PageSize" class="table-pagination">
+                  <el-pagination
+                    background
+                    layout="prev, pager, next"
+                    :total="nullbrMagnetResources.length"
+                    :page-size="pan115PageSize"
+                    :current-page="magnetPager.nullbr"
+                    @current-change="(page) => (magnetPager.nullbr = page)"
+                  />
+                </div>
                 <el-empty v-else :description="nullbrMagnetTried ? 'Nullbr 暂无磁力资源' : '尚未获取 Nullbr 磁力资源'" />
               </div>
             </el-tab-pane>
@@ -357,7 +367,7 @@
                 </el-button>
               </div>
               <div v-loading="seedhubMagnetLoading">
-                <el-table v-if="seedhubMagnetResources.length" :data="seedhubMagnetResources" stripe class="resource-table">
+                <el-table v-if="seedhubMagnetResources.length" :data="pagedSeedhubMagnetResources" stripe class="resource-table">
                   <el-table-column label="资源名称" min-width="380" show-overflow-tooltip>
                     <template #default="{ row }">{{ row.name || '-' }}</template>
                   </el-table-column>
@@ -371,6 +381,16 @@
                     </template>
                   </el-table-column>
                 </el-table>
+                <div v-if="seedhubMagnetResources.length > pan115PageSize" class="table-pagination">
+                  <el-pagination
+                    background
+                    layout="prev, pager, next"
+                    :total="seedhubMagnetResources.length"
+                    :page-size="pan115PageSize"
+                    :current-page="magnetPager.seedhub"
+                    @current-change="(page) => (magnetPager.seedhub = page)"
+                  />
+                </div>
                 <el-empty v-else :description="seedhubMagnetTried ? 'SeedHub 暂无磁力资源' : '尚未获取 SeedHub 资源'" />
               </div>
             </el-tab-pane>
@@ -384,7 +404,7 @@
             </el-button>
           </div>
           <div v-loading="ed2kLoading">
-            <el-table v-if="ed2kResources.length" :data="ed2kResources" stripe class="resource-table">
+            <el-table v-if="ed2kResources.length" :data="pagedEd2kResources" stripe class="resource-table">
               <el-table-column label="资源名称" min-width="380" show-overflow-tooltip>
                 <template #default="{ row }">{{ row.title || row.name || '-' }}</template>
               </el-table-column>
@@ -395,6 +415,16 @@
                 </template>
               </el-table-column>
             </el-table>
+            <div v-if="ed2kResources.length > pan115PageSize" class="table-pagination">
+              <el-pagination
+                background
+                layout="prev, pager, next"
+                :total="ed2kResources.length"
+                :page-size="pan115PageSize"
+                :current-page="ed2kPager"
+                @current-change="(page) => (ed2kPager = page)"
+              />
+            </div>
             <el-empty v-else :description="ed2kTried ? '暂无 ED2K 资源' : '尚未获取 ED2K 资源'" />
           </div>
         </el-tab-pane>
@@ -455,7 +485,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { pansouApi, pan115Api, searchApi, subscriptionApi } from '@/api'
@@ -492,7 +522,6 @@ const seedhubMagnetLoading = ref(false)
 const seedhubMagnetTried = ref(false)
 const ed2kLoading = ref(false)
 const ed2kTried = ref(false)
-const seedhubMagnetTaskId = ref('')
 const selectSaveDialogVisible = ref(false)
 const extractingFiles = ref(false)
 const selectSaving = ref(false)
@@ -506,7 +535,6 @@ const selectSaveForm = ref({
   targetFolder: '0',
   newFolderName: ''
 })
-let seedhubPollTimer = null
 
 const mediaType = computed(() => (String(route.params.mediaType || '').toLowerCase() === 'tv' ? 'tv' : 'movie'))
 const doubanId = computed(() => String(route.params.id || '').trim())
@@ -527,13 +555,18 @@ const hdhivePan115Resources = computed(() =>
 const tgPan115Resources = computed(() =>
   pan115Resources.value.filter((item) => item?.source_service === 'tg')
 )
-const pan115PageSize = 20
+const pan115PageSize = 10
 const pan115Pager = ref({
   nullbr: 1,
   pansou: 1,
   hdhive: 1,
   tg: 1
 })
+const magnetPager = ref({
+  nullbr: 1,
+  seedhub: 1
+})
+const ed2kPager = ref(1)
 const slicePan115Page = (list, page) => {
   const currentPage = Math.max(1, Number(page || 1))
   const start = (currentPage - 1) * pan115PageSize
@@ -549,6 +582,9 @@ const nullbrMagnetResources = computed(() =>
 const seedhubMagnetResources = computed(() =>
   magnetResources.value.filter((item) => item?.source_service === 'seedhub')
 )
+const pagedNullbrMagnetResources = computed(() => slicePan115Page(nullbrMagnetResources.value, magnetPager.value.nullbr))
+const pagedSeedhubMagnetResources = computed(() => slicePan115Page(seedhubMagnetResources.value, magnetPager.value.seedhub))
+const pagedEd2kResources = computed(() => slicePan115Page(ed2kResources.value, ed2kPager.value))
 
 const rewriteTmdbPosterSize = (url) => String(url).replace(/\/t\/p\/[^/]+\//, '/t/p/w500/')
 
@@ -1007,6 +1043,7 @@ const fetchMagnetNullbr = async () => {
   if (!detail.value) return
   nullbrMagnetTried.value = true
   magnetLoading.value = true
+  magnetPager.value.nullbr = 1
   try {
     let nullbrList = []
     if (mappedTmdbId.value) {
@@ -1038,84 +1075,34 @@ const fetchMagnetNullbr = async () => {
   }
 }
 
-const stopSeedhubTaskPolling = () => {
-  if (seedhubPollTimer) {
-    clearTimeout(seedhubPollTimer)
-    seedhubPollTimer = null
-  }
-}
-
-const resetSeedhubTaskState = async () => {
-  stopSeedhubTaskPolling()
-  const taskId = seedhubMagnetTaskId.value
-  seedhubMagnetTaskId.value = ''
-  if (!taskId) return
-  try {
-    await searchApi.cancelSeedhubMagnetTask(taskId)
-  } catch {
-    // ignore cleanup failures
-  }
-}
-
-const pollSeedhubMagnetTask = async (taskId) => {
-  try {
-    const { data } = await searchApi.getSeedhubMagnetTask(taskId)
-    const seedhubList = Array.isArray(data?.items) ? data.items : []
-    magnetResources.value = mergeMagnetResources(magnetResources.value, seedhubList)
-
-    const status = String(data?.status || '')
-    if (status === 'queued' || status === 'running') {
-      seedhubPollTimer = setTimeout(() => {
-        seedhubPollTimer = null
-        pollSeedhubMagnetTask(taskId)
-      }, 1200)
-      return
-    }
-
-    seedhubMagnetLoading.value = false
-    if ((status === 'success' || status === 'partial_success') && seedhubList.length === 0) {
-      ElMessage.info('SeedHub 暂未找到可用磁链')
-    }
-    if (status === 'failed') {
-      ElMessage.error(data?.error || 'SeedHub 检索失败')
-    }
-  } catch (error) {
-    stopSeedhubTaskPolling()
-    seedhubMagnetLoading.value = false
-    ElMessage.error(error.response?.data?.detail || error.message || 'SeedHub 磁链获取失败')
-  } finally {
-    if (seedhubMagnetLoading.value && !seedhubPollTimer) {
-      seedhubMagnetLoading.value = false
-    }
-  }
-}
-
 const fetchSeedhubMagnet = async () => {
   if (!detail.value || seedhubMagnetLoading.value) return
   seedhubMagnetLoading.value = true
   seedhubMagnetTried.value = true
-  stopSeedhubTaskPolling()
+  magnetPager.value.seedhub = 1
   try {
     if (mappedTmdbId.value) {
       const request = mediaType.value === 'tv'
-        ? searchApi.createTvSeedhubMagnetTask(mappedTmdbId.value)
-        : searchApi.createMovieSeedhubMagnetTask(mappedTmdbId.value)
+        ? searchApi.getTvMagnetSeedhub(mappedTmdbId.value, pan115PageSize)
+        : searchApi.getMovieMagnetSeedhub(mappedTmdbId.value, pan115PageSize)
       const { data } = await request
-      const taskId = String(data?.task_id || '')
-      if (!taskId) throw new Error('未获取到任务ID')
-      seedhubMagnetTaskId.value = taskId
-      await pollSeedhubMagnetTask(taskId)
+      const rows = Array.isArray(data?.list) ? data.list : []
+      const normalizedRows = rows.map((item) => ({ ...item, source_service: item?.source_service || 'seedhub' }))
+      magnetResources.value = mergeMagnetResources(magnetResources.value, normalizedRows)
+      if (normalizedRows.length === 0) {
+        ElMessage.info('SeedHub 暂未找到可用磁链')
+      }
       return
     }
 
     const keywords = buildPansouKeywords()
     let merged = magnetResources.value.slice()
     for (const keyword of keywords) {
-      const { data } = await searchApi.getSeedhubMagnetByKeyword(keyword, mediaType.value)
+      const { data } = await searchApi.getSeedhubMagnetByKeyword(keyword, mediaType.value, pan115PageSize)
       const rows = Array.isArray(data?.list) ? data.list : []
       const normalizedRows = rows.map((item) => ({ ...item, source_service: item?.source_service || 'seedhub' }))
       merged = mergeMagnetResources(merged, normalizedRows)
-      if (merged.filter((item) => item?.source_service === 'seedhub').length >= 40) break
+      if (normalizedRows.length > 0) break
     }
     magnetResources.value = merged
     if (seedhubMagnetResources.value.length === 0) {
@@ -1123,8 +1110,8 @@ const fetchSeedhubMagnet = async () => {
     }
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || error.message || 'SeedHub 磁链获取失败')
+  } finally {
     seedhubMagnetLoading.value = false
-    stopSeedhubTaskPolling()
   }
 }
 
@@ -1132,6 +1119,7 @@ const fetchEd2kResources = async () => {
   if (!detail.value) return
   ed2kTried.value = true
   ed2kLoading.value = true
+  ed2kPager.value = 1
   try {
     if (mappedTmdbId.value) {
       const ed2kResp = mediaType.value === 'tv'
@@ -1546,6 +1534,8 @@ const handleSubscribe = async () => {
 const resetResources = () => {
   pan115Resources.value = []
   pan115Pager.value = { nullbr: 1, pansou: 1, hdhive: 1, tg: 1 }
+  magnetPager.value = { nullbr: 1, seedhub: 1 }
+  ed2kPager.value = 1
   magnetResources.value = []
   ed2kResources.value = []
   pan115Loading.value = false
@@ -1640,13 +1630,14 @@ watch(pan115SourceTab, async (tab) => {
 })
 
 watch(magnetSourceTab, async (tab) => {
+  if (tab === 'nullbr') magnetPager.value.nullbr = 1
+  if (tab === 'seedhub') magnetPager.value.seedhub = 1
   if (tab === 'seedhub' && seedhubMagnetResources.value.length === 0 && !seedhubMagnetLoading.value && !seedhubMagnetTried.value) {
     await fetchSeedhubMagnet()
   }
 })
 
 watch(() => `${route.params.mediaType || ''}:${route.params.id || ''}`, async () => {
-  await resetSeedhubTaskState()
   isInEmby.value = false
   activeTab.value = 'pan115'
   pan115SourceTab.value = 'nullbr'
@@ -1657,10 +1648,6 @@ watch(() => `${route.params.mediaType || ''}:${route.params.id || ''}`, async ()
 
 onMounted(async () => {
   await loadDetail()
-})
-
-onBeforeUnmount(async () => {
-  await resetSeedhubTaskState()
 })
 </script>
 
