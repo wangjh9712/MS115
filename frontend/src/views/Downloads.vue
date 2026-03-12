@@ -505,4 +505,30 @@ onMounted(() => {
     }
   }
 }
+
+@media (max-width: 768px) {
+  .downloads-page {
+    .add-card,
+    .tasks-card {
+      :deep(.el-card__header),
+      :deep(.el-card__body) {
+        padding-inline: 16px;
+      }
+    }
+
+    .add-card {
+      .default-folder-tip {
+        line-height: 1.5;
+      }
+    }
+
+    .tasks-card {
+      .table-wrap {
+        .el-table {
+          min-width: 720px;
+        }
+      }
+    }
+  }
+}
 </style>

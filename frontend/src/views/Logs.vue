@@ -296,4 +296,27 @@ onMounted(async () => {
     }
   }
 }
+
+@media (max-width: 768px) {
+  .logs-page {
+    :deep(.el-card__body) {
+      padding-inline: 16px;
+    }
+
+    .summary-tags {
+      gap: 8px;
+    }
+
+    .table-wrap {
+      .el-table {
+        min-width: 1120px;
+      }
+    }
+
+    .pager-wrap {
+      margin-top: 12px;
+      overflow-x: auto;
+    }
+  }
+}
 </style>

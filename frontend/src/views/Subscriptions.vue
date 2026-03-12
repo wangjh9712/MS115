@@ -407,6 +407,12 @@ onMounted(() => {
   }
 
   .missing-panel {
+    overflow-x: auto;
+
+    :deep(.el-table) {
+      min-width: 980px;
+    }
+
     .missing-title {
       font-weight: 600;
       color: var(--ms-text-primary);
@@ -570,11 +576,31 @@ onMounted(() => {
 
       .header-actions {
         width: 100%;
+        flex-wrap: wrap;
+
+        :deep(.el-radio-group),
+        :deep(.el-switch),
+        :deep(.el-button) {
+          width: 100%;
+        }
       }
     }
 
     .subscriptions-grid {
       grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    }
+
+    .subscription-item {
+      .poster {
+        width: calc(100% + 32px);
+        margin: -16px -16px 10px;
+      }
+    }
+
+    .missing-panel {
+      :deep(.el-table) {
+        min-width: 860px;
+      }
     }
   }
 }

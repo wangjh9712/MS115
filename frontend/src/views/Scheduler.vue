@@ -161,4 +161,19 @@ onMounted(refreshAll)
     }
   }
 }
+
+@media (max-width: 768px) {
+  .scheduler-page {
+    .section-card {
+      :deep(.el-card__header),
+      :deep(.el-card__body) {
+        padding-inline: 16px;
+      }
+
+      .table-wrap .el-table {
+        min-width: 560px;
+      }
+    }
+  }
+}
 </style>
