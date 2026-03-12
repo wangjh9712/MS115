@@ -2186,14 +2186,14 @@ onBeforeUnmount(() => {
         }
 
         .recommend-card {
-          width: min(116px, 27vw);
-          min-width: min(116px, 27vw);
+          width: clamp(96px, calc((100vw - 72px) / 2.5), 132px);
+          min-width: clamp(96px, calc((100vw - 72px) / 2.5), 132px);
 
           .card-info {
-            padding: 10px 10px 12px;
+            padding: 9px 9px 11px;
 
             .title {
-              font-size: 12px;
+              font-size: 11px;
               -webkit-line-clamp: 1;
             }
           }
