@@ -33,7 +33,6 @@ class Settings(BaseSettings):
     TG_API_HASH: Optional[str] = None
     TG_PHONE: Optional[str] = None
     TG_SESSION: Optional[str] = None
-    TG_PROXY: Optional[str] = None
     TG_CHANNEL_USERNAMES: str = ""
     TG_SEARCH_DAYS: int = 30
     TG_MAX_MESSAGES_PER_CHANNEL: int = 200

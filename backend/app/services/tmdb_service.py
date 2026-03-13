@@ -46,6 +46,17 @@ class TmdbService:
         finally:
             await insecure_client.aclose()
 
+    async def check_connection(self) -> dict[str, Any]:
+        """Validate TMDB API connectivity with a lightweight real API request."""
+        payload = await self._get("/configuration", self._required_params())
+        image_config = payload.get("images")
+        change_keys = payload.get("change_keys")
+        return {
+            "images_configured": isinstance(image_config, dict) and bool(image_config),
+            "change_keys_count": len(change_keys) if isinstance(change_keys, list) else 0,
+            "configuration": payload,
+        }
+
     @staticmethod
     def _is_tls_hostname_error(exc: Exception) -> bool:
         text = str(exc or "").lower()

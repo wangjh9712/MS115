@@ -1541,7 +1541,7 @@ onBeforeUnmount(() => {
     box-shadow: none;
     
     :deep(.el-input) {
-      --search-pill-bg: rgba(17, 37, 72, 0.82);
+      --search-pill-bg: var(--ms-bg-elevated);
       width: 100%;
 
       .el-input__wrapper {

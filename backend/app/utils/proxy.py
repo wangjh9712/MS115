@@ -3,9 +3,65 @@
 提供统一的代理配置解析和 httpx 客户端代理支持
 """
 
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 from urllib.parse import urlparse
+
 from app.core.config import settings
+
+
+def _normalize_proxy_url(value: str | None) -> Optional[str]:
+    cleaned = str(value or "").strip()
+    return cleaned or None
+
+
+def _pick_proxy_for_scheme(
+    *,
+    scheme: str,
+    http_proxy: str | None,
+    https_proxy: str | None,
+    all_proxy: str | None,
+    socks_proxy: str | None,
+) -> Optional[str]:
+    normalized_scheme = str(scheme or "").strip().lower()
+    http_value = _normalize_proxy_url(http_proxy)
+    https_value = _normalize_proxy_url(https_proxy)
+    all_value = _normalize_proxy_url(all_proxy)
+    socks_value = _normalize_proxy_url(socks_proxy)
+
+    if normalized_scheme == "http":
+        return http_value or all_value or socks_value
+    if normalized_scheme == "https":
+        return https_value or all_value or socks_value
+    if normalized_scheme in {"socks", "socks4", "socks5"}:
+        return socks_value or all_value or https_value or http_value
+    return all_value or socks_value or https_value or http_value
+
+
+def _build_httpx_mounts(*, async_mode: bool) -> Optional[Dict[str, Any]]:
+    httpx_module = _get_httpx()
+    transport_cls = httpx_module.AsyncHTTPTransport if async_mode else httpx_module.HTTPTransport
+
+    http_proxy = _pick_proxy_for_scheme(
+        scheme="http",
+        http_proxy=settings.HTTP_PROXY,
+        https_proxy=settings.HTTPS_PROXY,
+        all_proxy=settings.ALL_PROXY,
+        socks_proxy=settings.SOCKS_PROXY,
+    )
+    https_proxy = _pick_proxy_for_scheme(
+        scheme="https",
+        http_proxy=settings.HTTP_PROXY,
+        https_proxy=settings.HTTPS_PROXY,
+        all_proxy=settings.ALL_PROXY,
+        socks_proxy=settings.SOCKS_PROXY,
+    )
+
+    mounts: Dict[str, Any] = {}
+    if http_proxy:
+        mounts["http://"] = transport_cls(proxy=http_proxy)
+    if https_proxy:
+        mounts["https://"] = transport_cls(proxy=https_proxy)
+    return mounts or None
 
 
 def get_proxy_config() -> Dict[str, Optional[str]]:
@@ -30,18 +86,7 @@ def get_httpx_proxy_mounts() -> Optional[Dict[str, Any]]:
     Returns:
         httpx.AsyncClient 可用的 mounts 字典，如果没有配置代理则返回 None
     """
-    http_proxy = settings.HTTP_PROXY or settings.ALL_PROXY
-    https_proxy = settings.HTTPS_PROXY or settings.ALL_PROXY
-
-    mounts = {}
-
-    if http_proxy:
-        mounts["http://"] = httpx.HTTPTransport(proxy=http_proxy)
-
-    if https_proxy:
-        mounts["https://"] = httpx.HTTPTransport(proxy=https_proxy)
-
-    return mounts if mounts else None
+    return _build_httpx_mounts(async_mode=True)
 
 
 def get_httpx_client_kwargs() -> Dict[str, Any]:
@@ -92,9 +137,21 @@ def should_use_proxy_for_url(url: str) -> bool:
     parsed = urlparse(str(url or ""))
     scheme = parsed.scheme.lower()
 
-    if scheme == "http" and (settings.HTTP_PROXY or settings.ALL_PROXY):
+    if scheme == "http" and _pick_proxy_for_scheme(
+        scheme="http",
+        http_proxy=settings.HTTP_PROXY,
+        https_proxy=settings.HTTPS_PROXY,
+        all_proxy=settings.ALL_PROXY,
+        socks_proxy=settings.SOCKS_PROXY,
+    ):
         return True
-    if scheme == "https" and (settings.HTTPS_PROXY or settings.ALL_PROXY):
+    if scheme == "https" and _pick_proxy_for_scheme(
+        scheme="https",
+        http_proxy=settings.HTTP_PROXY,
+        https_proxy=settings.HTTPS_PROXY,
+        all_proxy=settings.ALL_PROXY,
+        socks_proxy=settings.SOCKS_PROXY,
+    ):
         return True
 
     return False
@@ -169,14 +226,13 @@ class ProxyManager:
         Returns:
             代理 URL 或 None
         """
-        scheme = scheme.lower()
-        if scheme == "http":
-            return self._http_proxy or self._all_proxy
-        elif scheme == "https":
-            return self._https_proxy or self._all_proxy
-        elif scheme in ("socks", "socks5"):
-            return self._socks_proxy or self._all_proxy
-        return self._all_proxy
+        return _pick_proxy_for_scheme(
+            scheme=scheme,
+            http_proxy=self._http_proxy,
+            https_proxy=self._https_proxy,
+            all_proxy=self._all_proxy,
+            socks_proxy=self._socks_proxy,
+        )
 
     def create_httpx_client(self, **kwargs) -> "httpx.AsyncClient":
         """
@@ -193,13 +249,13 @@ class ProxyManager:
         client_kwargs = dict(kwargs)
         mounts = {}
 
-        http_proxy = self._http_proxy or self._all_proxy
-        https_proxy = self._https_proxy or self._all_proxy
+        http_proxy = self.get_proxy_for_scheme("http")
+        https_proxy = self.get_proxy_for_scheme("https")
 
         if http_proxy:
-            mounts["http://"] = httpx_module.HTTPTransport(proxy=http_proxy)
+            mounts["http://"] = httpx_module.AsyncHTTPTransport(proxy=http_proxy)
         if https_proxy:
-            mounts["https://"] = httpx_module.HTTPTransport(proxy=https_proxy)
+            mounts["https://"] = httpx_module.AsyncHTTPTransport(proxy=https_proxy)
 
         if mounts:
             client_kwargs["mounts"] = mounts
@@ -221,8 +277,8 @@ class ProxyManager:
         client_kwargs = dict(kwargs)
         mounts = {}
 
-        http_proxy = self._http_proxy or self._all_proxy
-        https_proxy = self._https_proxy or self._all_proxy
+        http_proxy = self.get_proxy_for_scheme("http")
+        https_proxy = self.get_proxy_for_scheme("https")
 
         if http_proxy:
             mounts["http://"] = httpx_module.HTTPTransport(proxy=http_proxy)

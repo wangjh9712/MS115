@@ -170,6 +170,23 @@ npm run build
 # 输出到 dist/ 目录
 ```
 
+#### 自动部署脚本（推荐）
+
+使用一键部署脚本，自动完成 Git 提交和 Docker 部署：
+
+```bash
+# 运行部署脚本（自动提交代码 + 构建部署）
+./deploy.sh
+```
+
+脚本功能：
+1. **自动 Git 提交**: 检测代码变更，自动提交到 master 分支（中文提交信息）
+2. **清理旧容器**: 停止并删除旧容器，清理历史镜像
+3. **构建镜像**: 使用 BuildKit 构建优化后的镜像
+4. **启动服务**: 启动容器并等待健康检查通过
+
+访问地址: http://localhost:5173
+
 #### Docker 部署
 
 ```bash
@@ -488,3 +505,4 @@ npm run preview                              # 预览构建
 
 ## Qwen Added Memories
 - 每次修改代码并提交到 git 后，需要自动重启前后端服务才能生效。后端启动命令: cd /mnt/d/code/MediaSync115/backend && /mnt/d/code/MediaSync115/backend/.venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload。前端已在后台运行，通常不需要重启。
+- 每次修改代码后，需要自动执行 Git 提交和 Docker 部署流程：1) 运行 ./deploy.sh 脚本；2) 脚本会自动提交代码到 master 分支（使用中文提交信息）；3) 自动构建 Docker 镜像并部署到本地；4) 访问地址 http://localhost:5173
