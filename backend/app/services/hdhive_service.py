@@ -111,6 +111,21 @@ class HDHiveService:
             value = cls._extract_first_int(user_obj.get(key))
             if value is not None:
                 return value
+
+        nested_keys = (
+            "user_meta",
+            "meta",
+            "profile",
+            "stats",
+            "user_stats",
+        )
+        for key in nested_keys:
+            nested_obj = user_obj.get(key)
+            if not isinstance(nested_obj, dict):
+                continue
+            value = cls._extract_user_points(nested_obj)
+            if value is not None:
+                return value
         return None
 
     @staticmethod
@@ -258,6 +273,23 @@ class HDHiveService:
                 return user_info
 
         return {}
+
+    @staticmethod
+    def _merge_user_info(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
+        merged = dict(base or {})
+        if not isinstance(extra, dict):
+            return merged
+
+        for key in ("username", "nickname", "points"):
+            value = extra.get(key)
+            if value is None or value == "":
+                continue
+            merged[key] = value
+
+        if "is_vip" in extra:
+            merged["is_vip"] = bool(extra.get("is_vip"))
+
+        return merged
 
     @staticmethod
     def _extract_media_slug_from_home(raw: str, tmdb_id: int, media_type: str) -> str:
@@ -410,11 +442,24 @@ class HDHiveService:
         return str(int(tmdb_id))
 
     async def get_user_info(self) -> dict[str, Any]:
-        home_html = await self._fetch_text("/")
-        user = self._extract_current_user(home_html)
-        if not user:
-            raise ValueError("未获取到 HDHive 用户信息，请检查 Cookie")
-        return user
+        candidate_paths = (
+            "/user/settings",
+            "/",
+        )
+        merged_user: dict[str, Any] = {}
+
+        for path in candidate_paths:
+            html = await self._fetch_text(path)
+            user = self._extract_current_user(html)
+            if not user:
+                continue
+            merged_user = self._merge_user_info(merged_user, user)
+            if merged_user.get("points") is not None:
+                return merged_user
+
+        if merged_user:
+            return merged_user
+        raise ValueError("未获取到 HDHive 用户信息，请检查 Cookie")
 
     async def _fetch_resource_share_link(self, slug: str) -> str:
         slug = str(slug or "").strip()
