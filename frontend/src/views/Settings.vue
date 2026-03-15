@@ -255,6 +255,39 @@
             </el-form-item>
           </el-form>
 
+          <el-divider />
+          <h4>自动签到</h4>
+          <el-form :model="hdhiveForm" label-width="120px">
+            <el-form-item label="启用自动签到">
+              <el-switch v-model="hdhiveForm.autoCheckinEnabled" />
+            </el-form-item>
+            <el-form-item label="签到模式">
+              <el-select
+                v-model="hdhiveForm.autoCheckinMode"
+                style="width: 220px"
+                :disabled="!hdhiveForm.autoCheckinEnabled"
+              >
+                <el-option label="普通签到" value="normal" />
+                <el-option label="赌狗签到" value="gamble" />
+              </el-select>
+              <el-text size="small" type="info" style="margin-left: 8px">
+                赌狗签到会按官网规则随机增减积分
+              </el-text>
+            </el-form-item>
+            <el-form-item label="每日执行时间">
+              <el-time-picker
+                v-model="hdhiveForm.autoCheckinRunTime"
+                format="HH:mm"
+                value-format="HH:mm"
+                placeholder="选择时间"
+                :disabled="!hdhiveForm.autoCheckinEnabled"
+              />
+              <el-text size="small" type="info" style="margin-left: 8px">
+                每天会在该时间自动执行一次所选签到模式
+              </el-text>
+            </el-form-item>
+          </el-form>
+
           <div
             v-if="hdhiveStatus.checked"
             class="connection-result"
@@ -1147,7 +1180,10 @@ const nullbrForm = ref({
 })
 
 const hdhiveForm = ref({
-  cookie: ''
+  cookie: '',
+  autoCheckinEnabled: false,
+  autoCheckinMode: 'normal',
+  autoCheckinRunTime: '09:00'
 })
 const embyForm = ref({
   url: '',
@@ -2025,15 +2061,22 @@ const handleSaveHdhive = async () => {
     ElMessage.warning('请输入 HDHive Cookie')
     return
   }
+  if (hdhiveForm.value.autoCheckinEnabled && !String(hdhiveForm.value.autoCheckinRunTime || '').trim()) {
+    ElMessage.warning('请选择 HDHive 自动签到执行时间')
+    return
+  }
 
   savingHdhive.value = true
   try {
     await settingsApi.updateRuntime({
-      hdhive_cookie: hdhiveForm.value.cookie
+      hdhive_cookie: hdhiveForm.value.cookie,
+      hdhive_auto_checkin_enabled: hdhiveForm.value.autoCheckinEnabled,
+      hdhive_auto_checkin_mode: hdhiveForm.value.autoCheckinMode || 'normal',
+      hdhive_auto_checkin_run_time: hdhiveForm.value.autoCheckinRunTime || '09:00'
     })
     await fetchRuntimeSettings()
     await refreshSourceConnectionStatus()
-    ElMessage.success('HDHive Cookie 已保存')
+    ElMessage.success('HDHive 配置与自动签到已保存')
     await checkHdhive(false)
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || 'HDHive 配置保存失败')
@@ -2682,6 +2725,9 @@ const fetchRuntimeSettings = async () => {
   try {
     const { data } = await settingsApi.getRuntime()
     hdhiveForm.value.cookie = data.hdhive_cookie || ''
+    hdhiveForm.value.autoCheckinEnabled = !!data.hdhive_auto_checkin_enabled
+    hdhiveForm.value.autoCheckinMode = data.hdhive_auto_checkin_mode || 'normal'
+    hdhiveForm.value.autoCheckinRunTime = data.hdhive_auto_checkin_run_time || '09:00'
     tgForm.value.apiId = data.tg_api_id || ''
     tgForm.value.apiHash = data.tg_api_hash || ''
     tgForm.value.phone = data.tg_phone || ''

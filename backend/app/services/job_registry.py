@@ -6,6 +6,8 @@ from app.services.emby_service import emby_service
 from app.services.emby_sync_index_service import emby_sync_index_service
 from app.services.explore_home_warmup_service import explore_home_warmup_service
 from app.core.database import async_session_maker
+from app.services.hdhive_service import hdhive_service
+from app.services.runtime_settings_service import runtime_settings_service
 from app.services.subscription_service import subscription_service
 
 
@@ -17,6 +19,7 @@ class JobRegistry:
             "system.cleanup_runtime_cache": self._cleanup_runtime_cache,
             "system.warmup_explore_home_cache": self._warmup_explore_home_cache,
             "system.noop": self._noop,
+            "hdhive.checkin": self._hdhive_checkin,
             "subscription.check_nullbr": self._check_subscription_nullbr,
             "subscription.check_hdhive": self._check_subscription_hdhive,
             "subscription.check_pansou": self._check_subscription_pansou,
@@ -62,6 +65,13 @@ class JobRegistry:
     async def _noop(self, **kwargs) -> dict[str, Any]:
         await asyncio.sleep(0)
         return {"success": True, "message": f"noop executed at {datetime.utcnow().isoformat()}"}
+
+    async def _hdhive_checkin(self, **kwargs) -> dict[str, Any]:
+        gamble = runtime_settings_service.get_hdhive_auto_checkin_mode() == "gamble"
+        result = await hdhive_service.check_in(gamble=gamble)
+        if not bool(result.get("success")):
+            raise ValueError(str(result.get("message") or "HDHive 自动签到失败"))
+        return result
 
     async def _check_subscription_nullbr(self, **kwargs) -> dict[str, Any]:
         async with async_session_maker() as db:

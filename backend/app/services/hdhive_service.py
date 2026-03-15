@@ -26,10 +26,12 @@ class HDHiveService:
             "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
         )
         self._unlock_action_id = "40dbca7ab6f555dbd98c40945c8b970185c58e16d3"
+        self._checkin_action_id = ""
         self._unlock_locks: dict[str, asyncio.Lock] = {}
         self._unlock_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._unlock_cache_ttl_seconds = 120.0
         self._unlock_action_id_cached_at = 0.0
+        self._checkin_action_id_cached_at = 0.0
         self._unlock_action_id_ttl_seconds = 1800.0
 
     def set_base_url(self, base_url: str | None) -> None:
@@ -200,14 +202,19 @@ class HDHiveService:
         return deduped
 
     @staticmethod
-    def _extract_unlock_action_id_from_chunk(raw: str) -> str:
+    def _extract_server_action_id_from_chunk(raw: str, action_name: str) -> str:
         if not raw:
             return ""
 
+        normalized_action = str(action_name or "").strip()
+        if not normalized_action:
+            return ""
+
+        escaped_action = re.escape(normalized_action)
         patterns = (
-            r'createServerReference\)\("([A-Za-z0-9]+)".{0,200}?,"unlockResource"\)',
-            r'createServerReference[^"]*\("([A-Za-z0-9]+)".{0,200}?,"unlockResource"\)',
-            r'createServerReference[^"]*\("([A-Za-z0-9]+)".{0,200}?"unlockResource"',
+            rf'createServerReference\)\("([A-Za-z0-9]+)".{{0,200}}?,"{escaped_action}"\)',
+            rf'createServerReference[^"]*\("([A-Za-z0-9]+)".{{0,200}}?,"{escaped_action}"\)',
+            rf'createServerReference[^"]*\("([A-Za-z0-9]+)".{{0,200}}?"{escaped_action}"',
         )
         for pattern in patterns:
             match = re.search(pattern, raw, re.S)
@@ -341,7 +348,7 @@ class HDHiveService:
             except Exception:
                 continue
 
-            action_id = self._extract_unlock_action_id_from_chunk(chunk_text)
+            action_id = self._extract_server_action_id_from_chunk(chunk_text, "unlockResource")
             if not action_id:
                 continue
             self._unlock_action_id = action_id
@@ -349,6 +356,31 @@ class HDHiveService:
             return action_id
 
         return self._unlock_action_id
+
+    async def _resolve_checkin_action_id(self, page_html: str) -> str:
+        now = monotonic()
+        if (
+            self._checkin_action_id
+            and self._checkin_action_id_cached_at > 0
+            and now - self._checkin_action_id_cached_at < self._unlock_action_id_ttl_seconds
+        ):
+            return self._checkin_action_id
+
+        chunk_paths = self._extract_next_static_chunk_paths(page_html)
+        for path in chunk_paths:
+            try:
+                chunk_text = await self._fetch_text(path, accept="application/javascript,text/javascript,*/*;q=0.8")
+            except Exception:
+                continue
+
+            action_id = self._extract_server_action_id_from_chunk(chunk_text, "checkIn")
+            if not action_id:
+                continue
+            self._checkin_action_id = action_id
+            self._checkin_action_id_cached_at = monotonic()
+            return action_id
+
+        return self._checkin_action_id
 
     @staticmethod
     def _extract_media_slug_from_home(raw: str, tmdb_id: int, media_type: str) -> str:
@@ -572,25 +604,19 @@ class HDHiveService:
             return {
                 "success": False,
                 "code": str(error_obj.get("code") or ""),
-                "message": str(error_obj.get("message") or error_obj.get("description") or "解锁失败"),
+                "message": str(error_obj.get("message") or error_obj.get("description") or "请求失败"),
                 "data": error_obj.get("data") if isinstance(error_obj.get("data"), dict) else {},
             }
         if isinstance(payload.get("digest"), str):
-            return {"success": False, "message": f"解锁请求失败(digest={payload['digest']})"}
-        return {"success": False, "message": "解锁请求未返回有效结果"}
+            return {"success": False, "message": f"请求失败(digest={payload['digest']})"}
+        return {"success": False, "message": "请求未返回有效结果"}
 
-    async def _unlock_resource_via_next_action(self, slug: str, resource_html: str) -> dict[str, Any]:
-        slug = str(slug or "").strip()
-        if not slug:
-            return {"success": False, "message": "资源 slug 为空"}
-
-        action_id = await self._resolve_unlock_action_id(resource_html)
-        resource_url = f"{self._base_url}/resource/115/{slug}"
+    async def _post_next_action(self, page_path: str, action_id: str, args: list[Any]) -> httpx.Response:
         headers = {
             "user-agent": self._user_agent,
             "accept": "text/x-component",
             "origin": self._base_url,
-            "referer": resource_url,
+            "referer": page_path if page_path.startswith("http") else f"{self._base_url}{page_path}",
             "next-action": action_id,
             "content-type": "text/plain;charset=UTF-8",
         }
@@ -599,19 +625,75 @@ class HDHiveService:
 
         client = self._create_client()
         try:
-            response = await client.post(resource_url, headers=headers, content=json.dumps([slug]))
-            if response.status_code == 404 and "Server action not found" in response.text:
-                self._unlock_action_id_cached_at = 0.0
-                refreshed_action_id = await self._resolve_unlock_action_id(resource_html)
-                if refreshed_action_id and refreshed_action_id != action_id:
-                    headers["next-action"] = refreshed_action_id
-                    response = await client.post(resource_url, headers=headers, content=json.dumps([slug]))
-            response.raise_for_status()
-            parsed = self._parse_next_action_response(response.text)
-            parsed["raw"] = response.text[:2000]
-            return parsed
+            return await client.post(
+                page_path if page_path.startswith("http") else f"{self._base_url}{page_path}",
+                headers=headers,
+                content=json.dumps(args, ensure_ascii=False),
+            )
         finally:
             await client.aclose()
+
+    async def _unlock_resource_via_next_action(self, slug: str, resource_html: str) -> dict[str, Any]:
+        slug = str(slug or "").strip()
+        if not slug:
+            return {"success": False, "message": "资源 slug 为空"}
+
+        page_path = f"/resource/115/{slug}"
+        action_id = await self._resolve_unlock_action_id(resource_html)
+        response = await self._post_next_action(page_path, action_id, [slug])
+        if response.status_code == 404 and "Server action not found" in response.text:
+            self._unlock_action_id_cached_at = 0.0
+            refreshed_action_id = await self._resolve_unlock_action_id(resource_html)
+            if refreshed_action_id and refreshed_action_id != action_id:
+                response = await self._post_next_action(page_path, refreshed_action_id, [slug])
+        response.raise_for_status()
+        parsed = self._parse_next_action_response(response.text)
+        parsed["raw"] = response.text[:2000]
+        return parsed
+
+    async def _load_checkin_page(self) -> tuple[str, str]:
+        candidate_paths = (
+            "/user/signin",
+            "/user/checkin",
+        )
+        for path in candidate_paths:
+            try:
+                html = await self._fetch_text(path)
+            except Exception:
+                continue
+            if html:
+                return path, html
+        raise ValueError("未获取到 HDHive 签到页面，请检查 Cookie")
+
+    async def check_in(self, gamble: bool = False) -> dict[str, Any]:
+        page_path, page_html = await self._load_checkin_page()
+        action_id = await self._resolve_checkin_action_id(page_html)
+        response = await self._post_next_action(page_path, action_id, [bool(gamble)])
+        if response.status_code == 404 and "Server action not found" in response.text:
+            self._checkin_action_id_cached_at = 0.0
+            refreshed_action_id = await self._resolve_checkin_action_id(page_html)
+            if refreshed_action_id and refreshed_action_id != action_id:
+                response = await self._post_next_action(page_path, refreshed_action_id, [bool(gamble)])
+        response.raise_for_status()
+
+        parsed = self._parse_next_action_response(response.text)
+        user_info: dict[str, Any] = {}
+        try:
+            user_info = await self.get_user_info()
+        except Exception:
+            user_info = {}
+
+        result = {
+            "success": bool(parsed.get("success")),
+            "message": str(parsed.get("message") or "").strip() or ("签到成功" if parsed.get("success") else "签到失败"),
+            "mode": "gamble" if gamble else "normal",
+            "code": str(parsed.get("code") or "").strip(),
+            "data": parsed.get("data") if isinstance(parsed.get("data"), dict) else {},
+            "user": user_info,
+            "points": self._extract_first_int(user_info.get("points")) if isinstance(user_info, dict) else None,
+            "page_path": page_path,
+        }
+        return result
 
     async def unlock_resource(self, slug: str) -> dict[str, Any]:
         slug = str(slug or "").strip()

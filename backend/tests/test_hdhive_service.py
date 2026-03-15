@@ -76,15 +76,25 @@ class TestHDHiveService:
             "points": 502,
         }
 
-    def test_extract_unlock_action_id_from_chunk(self) -> None:
+    def test_extract_server_action_id_from_chunk(self) -> None:
         raw = (
             'xxx(0,e.createServerReference)("40104633e124c17495f8f0497d9a91bd9a5b843744",'
             'e.callServer,void 0,e.findSourceMapURL,"unlockResource")yyy'
         )
 
-        action_id = HDHiveService._extract_unlock_action_id_from_chunk(raw)
+        action_id = HDHiveService._extract_server_action_id_from_chunk(raw, "unlockResource")
 
         assert action_id == "40104633e124c17495f8f0497d9a91bd9a5b843744"
+
+    def test_extract_checkin_action_id_from_chunk(self) -> None:
+        raw = (
+            'xxx(0,e.createServerReference)("406e0e83ed93f56902b65d137f5f98bfb98187e837",'
+            'e.callServer,void 0,e.findSourceMapURL,"checkIn")yyy'
+        )
+
+        action_id = HDHiveService._extract_server_action_id_from_chunk(raw, "checkIn")
+
+        assert action_id == "406e0e83ed93f56902b65d137f5f98bfb98187e837"
 
     def test_extract_next_static_chunk_paths(self) -> None:
         raw = (

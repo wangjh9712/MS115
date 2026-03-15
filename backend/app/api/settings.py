@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import io
+import re
 from urllib.parse import quote, urlparse
 from typing import Any, Optional
 
@@ -15,6 +16,7 @@ from app.services.pansou_service import pansou_service
 from app.services.runtime_settings_service import runtime_settings_service
 from app.services.app_metadata_service import app_metadata_service
 from app.services.subscription_scheduler_service import subscription_scheduler_service
+from app.services.hdhive_checkin_scheduler_service import hdhive_checkin_scheduler_service
 from app.services.emby_sync_index_service import emby_sync_index_service
 from app.services.emby_sync_scheduler_service import emby_sync_scheduler_service
 from app.services.tg_sync_service import tg_sync_service
@@ -43,6 +45,9 @@ class RuntimeSettingsRequest(BaseModel):
     socks_proxy: Optional[str] = None
     hdhive_cookie: Optional[str] = None
     hdhive_base_url: Optional[str] = None
+    hdhive_auto_checkin_enabled: Optional[bool] = None
+    hdhive_auto_checkin_mode: Optional[str] = None
+    hdhive_auto_checkin_run_time: Optional[str] = None
     pansou_base_url: Optional[str] = None
     nullbr_app_id: Optional[str] = None
     nullbr_api_key: Optional[str] = None
@@ -209,6 +214,25 @@ def _validate_hdhive_unlock_settings(merged_settings: dict) -> None:
         budget_points = 0
     if budget_points < 1:
         raise HTTPException(status_code=400, detail="HDHive 自动解锁任务积分预算必须大于等于 1")
+
+
+def _validate_hdhive_checkin_settings(merged_settings: dict) -> None:
+    enabled = bool(merged_settings.get("hdhive_auto_checkin_enabled", False))
+    if not enabled:
+        return
+
+    cookie = str(merged_settings.get("hdhive_cookie") or "").strip()
+    base_url = str(merged_settings.get("hdhive_base_url") or "").strip()
+    if not cookie or not base_url:
+        raise HTTPException(status_code=400, detail="启用 HDHive 自动签到时必须配置 HDHive Cookie 和 Base URL")
+
+    mode = str(merged_settings.get("hdhive_auto_checkin_mode") or "normal").strip().lower()
+    if mode not in {"normal", "gamble"}:
+        raise HTTPException(status_code=400, detail="HDHive 自动签到模式仅支持 normal 或 gamble")
+
+    run_time = str(merged_settings.get("hdhive_auto_checkin_run_time") or "").strip()
+    if not run_time or not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", run_time):
+        raise HTTPException(status_code=400, detail="HDHive 自动签到执行时间格式必须为 HH:mm")
 
 
 def _validate_emby_sync_settings(merged_settings: dict) -> None:
@@ -437,6 +461,13 @@ async def update_runtime_settings(request: RuntimeSettingsRequest):
     }
     if any(key in payload for key in unlock_keys) or payload.get("hdhive_cookie") is not None:
         _validate_hdhive_unlock_settings(merged_settings)
+    checkin_keys = {
+        "hdhive_auto_checkin_enabled",
+        "hdhive_auto_checkin_mode",
+        "hdhive_auto_checkin_run_time",
+    }
+    if any(key in payload for key in checkin_keys) or payload.get("hdhive_cookie") is not None:
+        _validate_hdhive_checkin_settings(merged_settings)
     if any(key in payload for key in {"emby_url", "emby_api_key", "emby_sync_enabled", "emby_sync_interval_hours"}):
         _validate_emby_sync_settings(merged_settings)
     if any(key in payload for key in {"update_source_type", "update_repository"}):
@@ -444,6 +475,7 @@ async def update_runtime_settings(request: RuntimeSettingsRequest):
     try:
         updated = runtime_settings_service.update_bulk(payload)
         await subscription_scheduler_service.ensure_subscription_tasks()
+        await hdhive_checkin_scheduler_service.ensure_checkin_task()
         await emby_sync_scheduler_service.ensure_sync_task()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
