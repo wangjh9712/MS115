@@ -75,3 +75,47 @@ class TestHDHiveService:
             "is_vip": True,
             "points": 502,
         }
+
+    def test_extract_unlock_action_id_from_chunk(self) -> None:
+        raw = (
+            'xxx(0,e.createServerReference)("40104633e124c17495f8f0497d9a91bd9a5b843744",'
+            'e.callServer,void 0,e.findSourceMapURL,"unlockResource")yyy'
+        )
+
+        action_id = HDHiveService._extract_unlock_action_id_from_chunk(raw)
+
+        assert action_id == "40104633e124c17495f8f0497d9a91bd9a5b843744"
+
+    def test_extract_next_static_chunk_paths(self) -> None:
+        raw = (
+            'a "/_next/static/chunks/abc123.js" b '
+            '"/_next/static/chunks/def456.js" c '
+            '"/_next/static/chunks/abc123.js"'
+        )
+
+        paths = HDHiveService._extract_next_static_chunk_paths(raw)
+
+        assert paths == [
+            "/_next/static/chunks/abc123.js",
+            "/_next/static/chunks/def456.js",
+        ]
+
+    def test_resolve_unlock_action_id_ignores_uncached_fallback_id(self) -> None:
+        service = HDHiveService()
+        service._unlock_action_id = "40dbca7ab6f555dbd98c40945c8b970185c58e16d3"
+        service._unlock_action_id_cached_at = 0.0
+
+        async def fake_fetch_text(path: str, accept: str | None = None) -> str:
+            assert path == "/_next/static/chunks/runtime.js"
+            return (
+                '(0,e.createServerReference)("40104633e124c17495f8f0497d9a91bd9a5b843744",'
+                'e.callServer,void 0,e.findSourceMapURL,"unlockResource")'
+            )
+
+        service._fetch_text = fake_fetch_text  # type: ignore[method-assign]
+
+        action_id = asyncio.run(
+            service._resolve_unlock_action_id('"/_next/static/chunks/runtime.js"')
+        )
+
+        assert action_id == "40104633e124c17495f8f0497d9a91bd9a5b843744"

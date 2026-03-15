@@ -29,6 +29,8 @@ class HDHiveService:
         self._unlock_locks: dict[str, asyncio.Lock] = {}
         self._unlock_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._unlock_cache_ttl_seconds = 120.0
+        self._unlock_action_id_cached_at = 0.0
+        self._unlock_action_id_ttl_seconds = 1800.0
 
     def set_base_url(self, base_url: str | None) -> None:
         value = str(base_url or "").strip()
@@ -48,10 +50,10 @@ class HDHiveService:
         }
         return proxy_manager.create_httpx_client(**client_kwargs)
 
-    async def _fetch_text(self, path: str) -> str:
+    async def _fetch_text(self, path: str, accept: str | None = None) -> str:
         headers = {
             "user-agent": self._user_agent,
-            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "accept": accept or "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
         if self._cookie:
             headers["cookie"] = self._cookie
@@ -182,6 +184,38 @@ class HDHiveService:
         return ""
 
     @staticmethod
+    def _extract_next_static_chunk_paths(raw: str) -> list[str]:
+        if not raw:
+            return []
+
+        matches = re.findall(r'/_next/static/chunks/[A-Za-z0-9._-]+\.js', raw)
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for item in matches:
+            value = str(item or "").strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            deduped.append(value)
+        return deduped
+
+    @staticmethod
+    def _extract_unlock_action_id_from_chunk(raw: str) -> str:
+        if not raw:
+            return ""
+
+        patterns = (
+            r'createServerReference\)\("([A-Za-z0-9]+)".{0,200}?,"unlockResource"\)',
+            r'createServerReference[^"]*\("([A-Za-z0-9]+)".{0,200}?,"unlockResource"\)',
+            r'createServerReference[^"]*\("([A-Za-z0-9]+)".{0,200}?"unlockResource"',
+        )
+        for pattern in patterns:
+            match = re.search(pattern, raw, re.S)
+            if match:
+                return str(match.group(1) or "").strip()
+        return ""
+
+    @staticmethod
     def _decode_json_candidates(payload: str) -> list[Any]:
         candidates: list[str] = [payload]
 
@@ -290,6 +324,31 @@ class HDHiveService:
             merged["is_vip"] = bool(extra.get("is_vip"))
 
         return merged
+
+    async def _resolve_unlock_action_id(self, resource_html: str) -> str:
+        now = monotonic()
+        if (
+            self._unlock_action_id
+            and self._unlock_action_id_cached_at > 0
+            and now - self._unlock_action_id_cached_at < self._unlock_action_id_ttl_seconds
+        ):
+            return self._unlock_action_id
+
+        chunk_paths = self._extract_next_static_chunk_paths(resource_html)
+        for path in chunk_paths:
+            try:
+                chunk_text = await self._fetch_text(path, accept="application/javascript,text/javascript,*/*;q=0.8")
+            except Exception:
+                continue
+
+            action_id = self._extract_unlock_action_id_from_chunk(chunk_text)
+            if not action_id:
+                continue
+            self._unlock_action_id = action_id
+            self._unlock_action_id_cached_at = monotonic()
+            return action_id
+
+        return self._unlock_action_id
 
     @staticmethod
     def _extract_media_slug_from_home(raw: str, tmdb_id: int, media_type: str) -> str:
@@ -520,18 +579,19 @@ class HDHiveService:
             return {"success": False, "message": f"解锁请求失败(digest={payload['digest']})"}
         return {"success": False, "message": "解锁请求未返回有效结果"}
 
-    async def _unlock_resource_via_next_action(self, slug: str) -> dict[str, Any]:
+    async def _unlock_resource_via_next_action(self, slug: str, resource_html: str) -> dict[str, Any]:
         slug = str(slug or "").strip()
         if not slug:
             return {"success": False, "message": "资源 slug 为空"}
 
+        action_id = await self._resolve_unlock_action_id(resource_html)
         resource_url = f"{self._base_url}/resource/115/{slug}"
         headers = {
             "user-agent": self._user_agent,
             "accept": "text/x-component",
             "origin": self._base_url,
             "referer": resource_url,
-            "next-action": self._unlock_action_id,
+            "next-action": action_id,
             "content-type": "text/plain;charset=UTF-8",
         }
         if self._cookie:
@@ -540,6 +600,12 @@ class HDHiveService:
         client = self._create_client()
         try:
             response = await client.post(resource_url, headers=headers, content=json.dumps([slug]))
+            if response.status_code == 404 and "Server action not found" in response.text:
+                self._unlock_action_id_cached_at = 0.0
+                refreshed_action_id = await self._resolve_unlock_action_id(resource_html)
+                if refreshed_action_id and refreshed_action_id != action_id:
+                    headers["next-action"] = refreshed_action_id
+                    response = await client.post(resource_url, headers=headers, content=json.dumps([slug]))
             response.raise_for_status()
             parsed = self._parse_next_action_response(response.text)
             parsed["raw"] = response.text[:2000]
@@ -564,8 +630,11 @@ class HDHiveService:
             if cached and (now - cached[0] < self._unlock_cache_ttl_seconds):
                 return cached[1]
 
-            action_result = await self._unlock_resource_via_next_action(slug)
-            meta = await self._fetch_resource_meta(slug)
+            resource_html = await self._fetch_text(f"/resource/115/{slug}")
+            action_result = await self._unlock_resource_via_next_action(slug, resource_html)
+            meta = self._extract_resource_meta(resource_html)
+            if bool(meta.get("locked")):
+                meta = await self._fetch_resource_meta(slug)
             access_code = str(meta.get("access_code") or "").strip()
             share_link = str(meta.get("full_url") or "").strip()
             success = bool(action_result.get("success")) and bool(share_link or access_code)
