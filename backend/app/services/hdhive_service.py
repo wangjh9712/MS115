@@ -215,40 +215,47 @@ class HDHiveService:
 
     @classmethod
     def _extract_current_user(cls, raw: str) -> dict[str, Any]:
-        payload = ""
-        for marker in ('\\"currentUser\\":{', '"currentUser":{'):
-            payload = cls._extract_object_payload(raw, marker)
-            if payload:
-                break
-        if not payload:
+        payload_candidates: list[str] = []
+
+        normalized_raw = raw.replace('\\"', '"').replace("\\/", "/").replace("\\u0026", "&")
+        normalized_payload = cls._extract_object_payload(normalized_raw, '"currentUser":{')
+        if normalized_payload:
+            payload_candidates.append(normalized_payload)
+
+        direct_payload = cls._extract_object_payload(raw, '"currentUser":{')
+        if direct_payload:
+            payload_candidates.append(direct_payload)
+
+        if not payload_candidates:
             return {}
 
-        for parsed in cls._decode_json_candidates(payload):
-            if not isinstance(parsed, dict):
-                continue
+        for payload in payload_candidates:
+            for parsed in cls._decode_json_candidates(payload):
+                if not isinstance(parsed, dict):
+                    continue
 
-            username = str(parsed.get("username") or parsed.get("nickname") or "").strip()
-            nickname = str(parsed.get("nickname") or "").strip()
-            raw_vip = parsed.get("is_vip")
-            is_vip = False
-            if isinstance(raw_vip, bool):
-                is_vip = raw_vip
-            elif isinstance(raw_vip, (int, float)):
-                is_vip = int(raw_vip) > 0
-            elif isinstance(raw_vip, str):
-                raw_vip_text = raw_vip.strip().lower()
-                is_vip = raw_vip_text == "true" or raw_vip_text.isdigit() and int(raw_vip_text) > 0
+                username = str(parsed.get("username") or parsed.get("nickname") or "").strip()
+                nickname = str(parsed.get("nickname") or "").strip()
+                raw_vip = parsed.get("is_vip")
+                is_vip = False
+                if isinstance(raw_vip, bool):
+                    is_vip = raw_vip
+                elif isinstance(raw_vip, (int, float)):
+                    is_vip = int(raw_vip) > 0
+                elif isinstance(raw_vip, str):
+                    raw_vip_text = raw_vip.strip().lower()
+                    is_vip = raw_vip_text == "true" or raw_vip_text.isdigit() and int(raw_vip_text) > 0
 
-            user_info = {
-                "username": username,
-                "nickname": nickname,
-                "is_vip": bool(is_vip),
-            }
+                user_info = {
+                    "username": username,
+                    "nickname": nickname,
+                    "is_vip": bool(is_vip),
+                }
 
-            points = cls._extract_user_points(parsed)
-            if points is not None:
-                user_info["points"] = points
-            return user_info
+                points = cls._extract_user_points(parsed)
+                if points is not None:
+                    user_info["points"] = points
+                return user_info
 
         return {}
 
