@@ -42,5 +42,13 @@ logs/
 .env.*
 !.env.example
 backend/.venv-linux3/
+backend/.venv*/
+backend/venv/
+.qoder/
+
+# Local reports
+api_test_report_*.txt
+backend/API_TEST_REPORT.md
+
 playwright-report/
 test-results/
