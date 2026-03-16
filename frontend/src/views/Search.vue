@@ -653,6 +653,10 @@ const getCachedHomeSectionBatch = (sectionKey, start, count) => {
     homeSectionBatchCache.delete(cacheKey)
     return null
   }
+  if (!Object.prototype.hasOwnProperty.call(cached.payload || {}, 'emby_status_map')) {
+    homeSectionBatchCache.delete(cacheKey)
+    return null
+  }
   return cached.payload
 }
 
@@ -837,7 +841,10 @@ const requestHomeSectionBatch = async (sectionKey, start, { refresh = false } = 
 
   const task = searchApi.getExploreSection(exploreSource.value, sectionKey, count, refresh, start)
     .then(({ data }) => {
-      const payload = data.section || {}
+      const payload = {
+        ...(data.section || {}),
+        emby_status_map: data?.emby_status_map || {}
+      }
       setCachedHomeSectionBatch(sectionKey, start, count, payload)
       return payload
     })
