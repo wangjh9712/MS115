@@ -122,15 +122,23 @@ class PansouService:
                 except Exception as e:
                     # 尝试使用其他方式解析
                     content = response.content
-                    # 尝试 latin-1 可以解码任何字节
-                    text = content.decode('latin-1')
+                    # 优先按 utf-8 解析，避免中文标题被错误解码成乱码
                     # 然后尝试解析
                     try:
+                        text = content.decode('utf-8')
                         return json.loads(text)
-                    except:
-                        # 最后尝试忽略错误
+                    except Exception:
+                        pass
+                    try:
                         text = content.decode('utf-8', errors='ignore')
                         return json.loads(text)
+                    except Exception:
+                        pass
+                    try:
+                        text = content.decode('latin-1')
+                        return json.loads(text)
+                    except Exception:
+                        raise e
             else:
                 return {
                     "success": False,

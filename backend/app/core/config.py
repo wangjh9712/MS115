@@ -4,7 +4,7 @@ from typing import Optional
 
 class Settings(BaseSettings):
     APP_NAME: str = "MediaSync115"
-    APP_VERSION: str = "1.0.2"
+    APP_VERSION: str = "1.0.2.1"
     DEBUG: bool = True
 
     # Proxy Configuration

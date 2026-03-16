@@ -3,8 +3,9 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import delete, func, or_, select
+from sqlalchemy.exc import OperationalError
 
-from app.core.database import async_session_maker
+from app.core.database import async_session_maker, ensure_tables_exist, is_missing_table_error
 from app.models.models import TgMessageIndex, TgSyncState
 
 
@@ -149,7 +150,19 @@ class TgIndexService:
         ]
         return " ".join([part for part in parts if part]).strip()
 
+    async def _ensure_tables(self) -> None:
+        await ensure_tables_exist("tg_message_index", "tg_sync_state")
+
     async def upsert_rows(self, rows: list[dict[str, Any]]) -> int:
+        try:
+            return await self._upsert_rows(rows)
+        except OperationalError as exc:
+            if not is_missing_table_error(exc, "tg_message_index", "tg_sync_state"):
+                raise
+            await self._ensure_tables()
+            return await self._upsert_rows(rows)
+
+    async def _upsert_rows(self, rows: list[dict[str, Any]]) -> int:
         if not rows:
             return 0
 
@@ -207,6 +220,41 @@ class TgIndexService:
         return changed
 
     async def search_resources(
+        self,
+        *,
+        keyword: str,
+        media_type: str,
+        channels: list[str],
+        per_channel_limit: int,
+        expected_title: str = "",
+        expected_original_title: str = "",
+        expected_year: str = "",
+    ) -> list[dict[str, Any]]:
+        try:
+            return await self._search_resources(
+                keyword=keyword,
+                media_type=media_type,
+                channels=channels,
+                per_channel_limit=per_channel_limit,
+                expected_title=expected_title,
+                expected_original_title=expected_original_title,
+                expected_year=expected_year,
+            )
+        except OperationalError as exc:
+            if not is_missing_table_error(exc, "tg_message_index", "tg_sync_state"):
+                raise
+            await self._ensure_tables()
+            return await self._search_resources(
+                keyword=keyword,
+                media_type=media_type,
+                channels=channels,
+                per_channel_limit=per_channel_limit,
+                expected_title=expected_title,
+                expected_original_title=expected_original_title,
+                expected_year=expected_year,
+            )
+
+    async def _search_resources(
         self,
         *,
         keyword: str,
@@ -299,6 +347,15 @@ class TgIndexService:
         return rows
 
     async def get_status(self, channels: list[str]) -> dict[str, Any]:
+        try:
+            return await self._get_status(channels)
+        except OperationalError as exc:
+            if not is_missing_table_error(exc, "tg_message_index", "tg_sync_state"):
+                raise
+            await self._ensure_tables()
+            return await self._get_status(channels)
+
+    async def _get_status(self, channels: list[str]) -> dict[str, Any]:
         safe_channels = [str(item or "").strip() for item in channels if str(item or "").strip()]
         async with async_session_maker() as db:
             total_result = await db.execute(select(func.count()).select_from(TgMessageIndex))
@@ -344,6 +401,15 @@ class TgIndexService:
         }
 
     async def clear_all(self) -> None:
+        try:
+            await self._clear_all()
+        except OperationalError as exc:
+            if not is_missing_table_error(exc, "tg_message_index", "tg_sync_state"):
+                raise
+            await self._ensure_tables()
+            await self._clear_all()
+
+    async def _clear_all(self) -> None:
         async with async_session_maker() as db:
             await db.execute(delete(TgMessageIndex))
             await db.execute(delete(TgSyncState))

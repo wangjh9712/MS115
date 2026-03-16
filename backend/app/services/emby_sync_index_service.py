@@ -9,8 +9,9 @@ from typing import Any
 
 import httpx
 from sqlalchemy import delete, select
+from sqlalchemy.exc import OperationalError
 
-from app.core.database import async_session_maker
+from app.core.database import async_session_maker, ensure_tables_exist, is_missing_table_error
 from app.models.emby_sync_index import EmbyMediaIndex, EmbySyncState, EmbyTvEpisodeIndex
 from app.services.runtime_settings_service import runtime_settings_service
 
@@ -25,19 +26,49 @@ class EmbySyncIndexService:
         self._lock = asyncio.Lock()
         self._background_task: asyncio.Task | None = None
 
+    async def _ensure_tables(self) -> None:
+        await ensure_tables_exist("emby_media_index", "emby_tv_episode_index", "emby_sync_state")
+
     async def get_status(self) -> dict[str, Any]:
+        try:
+            return await self._get_status()
+        except OperationalError as exc:
+            if not is_missing_table_error(exc, "emby_media_index", "emby_tv_episode_index", "emby_sync_state"):
+                raise
+            await self._ensure_tables()
+            return await self._get_status()
+
+    async def _get_status(self) -> dict[str, Any]:
         async with async_session_maker() as db:
             state = await self._get_or_create_state(db)
             await db.commit()
             return self._serialize_state(state, running=self._is_running())
 
     async def has_successful_snapshot(self) -> bool:
+        try:
+            return await self._has_successful_snapshot()
+        except OperationalError as exc:
+            if not is_missing_table_error(exc, "emby_media_index", "emby_tv_episode_index", "emby_sync_state"):
+                raise
+            await self._ensure_tables()
+            return await self._has_successful_snapshot()
+
+    async def _has_successful_snapshot(self) -> bool:
         async with async_session_maker() as db:
             state = await self._get_or_create_state(db)
             await db.commit()
             return state.last_successful_sync_at is not None
 
     async def get_movie_status(self, tmdb_id: int) -> dict[str, Any] | None:
+        try:
+            return await self._get_movie_status(tmdb_id)
+        except OperationalError as exc:
+            if not is_missing_table_error(exc, "emby_media_index", "emby_tv_episode_index", "emby_sync_state"):
+                raise
+            await self._ensure_tables()
+            return await self._get_movie_status(tmdb_id)
+
+    async def _get_movie_status(self, tmdb_id: int) -> dict[str, Any] | None:
         normalized_tmdb_id = int(tmdb_id or 0)
         if normalized_tmdb_id <= 0:
             return {
@@ -72,6 +103,15 @@ class EmbySyncIndexService:
         }
 
     async def get_tv_existing_episodes(self, tmdb_id: int) -> dict[str, Any] | None:
+        try:
+            return await self._get_tv_existing_episodes(tmdb_id)
+        except OperationalError as exc:
+            if not is_missing_table_error(exc, "emby_media_index", "emby_tv_episode_index", "emby_sync_state"):
+                raise
+            await self._ensure_tables()
+            return await self._get_tv_existing_episodes(tmdb_id)
+
+    async def _get_tv_existing_episodes(self, tmdb_id: int) -> dict[str, Any] | None:
         normalized_tmdb_id = int(tmdb_id or 0)
         if normalized_tmdb_id <= 0:
             return {
@@ -104,6 +144,15 @@ class EmbySyncIndexService:
         }
 
     async def sync_index(self, trigger: str = "manual") -> dict[str, Any]:
+        try:
+            return await self._sync_index(trigger=trigger)
+        except OperationalError as exc:
+            if not is_missing_table_error(exc, "emby_media_index", "emby_tv_episode_index", "emby_sync_state"):
+                raise
+            await self._ensure_tables()
+            return await self._sync_index(trigger=trigger)
+
+    async def _sync_index(self, trigger: str = "manual") -> dict[str, Any]:
         async with self._lock:
             started_ts = time.perf_counter()
             started_at = datetime.utcnow()

@@ -14,7 +14,7 @@ trap shutdown SIGINT SIGTERM
 
 nginx -t
 
-uvicorn main:app --host 127.0.0.1 --port 8000 --lifespan off &
+uvicorn main:app --host 127.0.0.1 --port 8000 &
 uvicorn_pid=$!
 
 nginx -g 'daemon off;' &

@@ -3,6 +3,7 @@
 提供统一的代理配置解析和 httpx 客户端代理支持
 """
 
+import ipaddress
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
@@ -35,6 +36,34 @@ def _pick_proxy_for_scheme(
     if normalized_scheme in {"socks", "socks4", "socks5"}:
         return socks_value or all_value or https_value or http_value
     return all_value or socks_value or https_value or http_value
+
+
+def _should_bypass_proxy_for_host(hostname: str | None) -> bool:
+    host = str(hostname or "").strip().lower()
+    if not host:
+        return False
+
+    if host in {"localhost", "host.docker.internal"} or host.endswith(".local"):
+        return True
+
+    try:
+        parsed_ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+
+    return any(
+        (
+            parsed_ip.is_private,
+            parsed_ip.is_loopback,
+            parsed_ip.is_link_local,
+            parsed_ip.is_reserved,
+        )
+    )
+
+
+def should_bypass_proxy_for_url(url: str | None) -> bool:
+    parsed = urlparse(str(url or "").strip())
+    return _should_bypass_proxy_for_host(parsed.hostname)
 
 
 def _build_httpx_mounts(*, async_mode: bool) -> Optional[Dict[str, Any]]:
@@ -134,6 +163,9 @@ def should_use_proxy_for_url(url: str) -> bool:
     Returns:
         是否应该使用代理
     """
+    if should_bypass_proxy_for_url(url):
+        return False
+
     parsed = urlparse(str(url or ""))
     scheme = parsed.scheme.lower()
 
@@ -248,6 +280,10 @@ class ProxyManager:
 
         client_kwargs = dict(kwargs)
         mounts = {}
+        base_url = client_kwargs.get("base_url")
+
+        if should_bypass_proxy_for_url(base_url):
+            return httpx_module.AsyncClient(**client_kwargs)
 
         http_proxy = self.get_proxy_for_scheme("http")
         https_proxy = self.get_proxy_for_scheme("https")
@@ -276,6 +312,10 @@ class ProxyManager:
 
         client_kwargs = dict(kwargs)
         mounts = {}
+        base_url = client_kwargs.get("base_url")
+
+        if should_bypass_proxy_for_url(base_url):
+            return httpx_module.Client(**client_kwargs)
 
         http_proxy = self.get_proxy_for_scheme("http")
         https_proxy = self.get_proxy_for_scheme("https")
