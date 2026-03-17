@@ -134,6 +134,9 @@ class TestHDHiveService:
             {
                 "slug": "a1b2c3d4e5f647898765432112345678",
                 "title": "Fight Club 4K REMUX",
+                "pan_type": "115",
+                "media_url": "https://hdhive.com/movie/example",
+                "media_slug": "905baf2b010911ee89d70242ac130004",
                 "share_size": "58.3 GB",
                 "video_resolution": ["2160p"],
                 "source": ["REMUX"],
@@ -151,4 +154,54 @@ class TestHDHiveService:
         assert row["share_link"] == ""
         assert row["unlock_points"] == 10
         assert row["hdhive_locked"] is True
+        assert row["hdhive_pan_type"] == "115"
+        assert row["hdhive_media_url"] == "https://hdhive.com/movie/example"
+        assert row["hdhive_media_slug"] == "905baf2b010911ee89d70242ac130004"
+        assert row["hdhive_resource_url"] == "https://hdhive.com/movie/example"
         assert row["pan115_savable"] is False
+
+    def test_list_resources_by_tmdb_only_keeps_115_rows(self) -> None:
+        service = HDHiveService(api_key="test-key")
+
+        async def fake_request_open_api(method: str, path: str, **kwargs):
+            assert method == "GET"
+            assert path == "/resources/movie/550"
+            return None, {
+                "success": True,
+                "code": "200",
+                "message": "success",
+                "data": [
+                    {
+                        "slug": "115slug",
+                        "title": "Fight Club 115",
+                        "pan_type": "115",
+                        "share_size": "10 GB",
+                    },
+                    {
+                        "slug": "quarkslug",
+                        "title": "Fight Club Quark",
+                        "pan_type": "quark",
+                        "share_size": "11 GB",
+                    },
+                    {
+                        "slug": "baiduslug",
+                        "title": "Fight Club Baidu",
+                        "pan_type": "baidu",
+                        "share_size": "12 GB",
+                    },
+                    {
+                        "slug": "115slug2",
+                        "title": "Fight Club 115 2",
+                        "pan_type": "115.com",
+                        "share_size": "13 GB",
+                    },
+                ],
+                "meta": {"total": 4},
+            }
+
+        service._request_open_api = fake_request_open_api  # type: ignore[method-assign]
+
+        rows = asyncio.run(service.get_movie_pan115(550))
+
+        assert [row["slug"] for row in rows] == ["115slug", "115slug2"]
+        assert all(row["hdhive_pan_type"] == "115" for row in rows)

@@ -2143,9 +2143,16 @@ async def get_movie_pan115_with_hdhive(
 
     attempts: list[dict[str, Any]] = []
     hdhive_list: list[dict] = []
+    hdhive_diagnostics: dict[str, Any] = {}
 
     try:
-        hdhive_list = _mark_hdhive_pan115_source(await hdhive_service.get_movie_pan115(tmdb_id))
+        hdhive_payload = await hdhive_service.get_movie_pan115_result(tmdb_id)
+        hdhive_list = _mark_hdhive_pan115_source(list(hdhive_payload.get("items") or []))
+        hdhive_diagnostics = {
+            "raw_total": int(hdhive_payload.get("raw_total") or 0),
+            "filtered_115_total": int(hdhive_payload.get("filtered_total") or len(hdhive_list)),
+            "pan_type_counts": dict(hdhive_payload.get("pan_type_counts") or {}),
+        }
         attempts.append({"service": "hdhive", "status": "ok", "count": len(hdhive_list)})
     except Exception as exc:
         attempts.append({"service": "hdhive", "status": "error", "error": str(exc)})
@@ -2160,6 +2167,8 @@ async def get_movie_pan115_with_hdhive(
         source_counts=source_counts,
         attempts=attempts,
     )
+    if hdhive_diagnostics:
+        result["hdhive_diagnostics"] = hdhive_diagnostics
     _set_pan115_cached_payload(_movie_pan115_cache, cache_key, result)
     return result
 
@@ -2368,9 +2377,16 @@ async def get_tv_pan115_with_hdhive(
 
     attempts: list[dict[str, Any]] = []
     hdhive_list: list[dict] = []
+    hdhive_diagnostics: dict[str, Any] = {}
 
     try:
-        hdhive_list = _mark_hdhive_pan115_source(await hdhive_service.get_tv_pan115(tmdb_id))
+        hdhive_payload = await hdhive_service.get_tv_pan115_result(tmdb_id)
+        hdhive_list = _mark_hdhive_pan115_source(list(hdhive_payload.get("items") or []))
+        hdhive_diagnostics = {
+            "raw_total": int(hdhive_payload.get("raw_total") or 0),
+            "filtered_115_total": int(hdhive_payload.get("filtered_total") or len(hdhive_list)),
+            "pan_type_counts": dict(hdhive_payload.get("pan_type_counts") or {}),
+        }
         attempts.append({"service": "hdhive", "status": "ok", "count": len(hdhive_list)})
     except Exception as exc:
         attempts.append({"service": "hdhive", "status": "error", "error": str(exc)})
@@ -2385,6 +2401,8 @@ async def get_tv_pan115_with_hdhive(
         source_counts=source_counts,
         attempts=attempts,
     )
+    if hdhive_diagnostics:
+        result["hdhive_diagnostics"] = hdhive_diagnostics
     _set_pan115_cached_payload(_tv_pan115_cache, cache_key, result)
     return result
 

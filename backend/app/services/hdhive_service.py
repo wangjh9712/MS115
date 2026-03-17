@@ -362,6 +362,19 @@ class HDHiveService:
         raw = "".join(ch for ch in raw if not unicodedata.combining(ch))
         return re.sub(r"[\s\-_·:：,.，。!！?？/\\\\'\"`()\\[\\]]+", "", raw.strip().lower())
 
+    @staticmethod
+    def _normalize_pan_type(raw_value: Any) -> str:
+        normalized = re.sub(r"[^a-z0-9]+", "", str(raw_value or "").strip().lower())
+        if not normalized:
+            return ""
+        if normalized in {"115", "115com", "115wangpan", "115netdisk"}:
+            return "115"
+        return normalized
+
+    @classmethod
+    def _is_pan115(cls, raw_value: Any) -> bool:
+        return cls._normalize_pan_type(raw_value) == "115"
+
     async def check_connection(self) -> dict[str, Any]:
         _, ping_payload = await self._request_open_api("GET", "/ping")
         ping_data = ping_payload.get("data") if isinstance(ping_payload.get("data"), dict) else {}
@@ -481,6 +494,9 @@ class HDHiveService:
         unlock_points = int(row.get("unlock_points") or 0)
         title = str(row.get("title") or "").strip() or f"HDHive 资源 #{index + 1}"
         resource_name = str(row.get("remark") or "").strip() or title
+        pan_type = self._normalize_pan_type(row.get("pan_type"))
+        media_url = str(row.get("media_url") or "").strip()
+        media_slug = self._normalize_slug(str(row.get("media_slug") or ""))
         validate_status = str(row.get("validate_status") or "").strip().lower()
         validate_message = str(row.get("validate_message") or "").strip()
         suspected_invalid = validate_status in {"invalid", "suspected_invalid", "suspect_invalid"}
@@ -506,7 +522,10 @@ class HDHiveService:
             "hdhive_locked": locked,
             "hdhive_lock_code": "",
             "hdhive_lock_message": lock_message,
-            "hdhive_resource_url": "",
+            "hdhive_resource_url": media_url,
+            "hdhive_pan_type": pan_type,
+            "hdhive_media_url": media_url,
+            "hdhive_media_slug": media_slug,
             "hdhive_validate_status": validate_status,
             "hdhive_validate_message": validate_message,
             "hdhive_suspected_invalid": suspected_invalid,
@@ -519,7 +538,7 @@ class HDHiveService:
             "user": row.get("user") if isinstance(row.get("user"), dict) else None,
         }
 
-    async def _list_resources_by_tmdb(self, tmdb_id: int, media_type: str) -> list[dict[str, Any]]:
+    async def _collect_tmdb_resources(self, tmdb_id: int, media_type: str) -> dict[str, Any]:
         normalized_media_type = self._normalize_media_type(media_type)
         _, payload = await self._request_open_api(
             "GET",
@@ -527,8 +546,30 @@ class HDHiveService:
         )
         rows = payload.get("data")
         if not isinstance(rows, list):
-            return []
-        return [self._map_resource_row(row, idx) for idx, row in enumerate(rows) if isinstance(row, dict)]
+            rows = []
+        meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+        raw_total = self._extract_first_int(meta.get("total"))
+        pan_type_counts: dict[str, int] = {}
+        filtered_rows: list[dict[str, Any]] = []
+        for idx, row in enumerate(rows):
+            if not isinstance(row, dict):
+                continue
+            pan_type = self._normalize_pan_type(row.get("pan_type")) or "unknown"
+            pan_type_counts[pan_type] = pan_type_counts.get(pan_type, 0) + 1
+            if pan_type != "115":
+                continue
+            filtered_rows.append(self._map_resource_row(row, idx))
+        return {
+            "items": filtered_rows,
+            "raw_total": raw_total if raw_total is not None else len(rows),
+            "filtered_total": len(filtered_rows),
+            "pan_type_counts": pan_type_counts,
+        }
+
+    async def _list_resources_by_tmdb(self, tmdb_id: int, media_type: str) -> list[dict[str, Any]]:
+        payload = await self._collect_tmdb_resources(tmdb_id, media_type)
+        items = payload.get("items")
+        return list(items) if isinstance(items, list) else []
 
     async def _search_tmdb_candidates(self, keyword: str, media_type: str) -> list[int]:
         normalized_keyword = str(keyword or "").strip()
@@ -607,6 +648,12 @@ class HDHiveService:
 
     async def get_tv_pan115(self, tmdb_id: int) -> list[dict[str, Any]]:
         return await self._list_resources_by_tmdb(tmdb_id, "tv")
+
+    async def get_movie_pan115_result(self, tmdb_id: int) -> dict[str, Any]:
+        return await self._collect_tmdb_resources(tmdb_id, "movie")
+
+    async def get_tv_pan115_result(self, tmdb_id: int) -> dict[str, Any]:
+        return await self._collect_tmdb_resources(tmdb_id, "tv")
 
 
 hdhive_service = HDHiveService()
