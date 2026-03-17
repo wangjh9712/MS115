@@ -103,9 +103,33 @@ docker pull --platform linux/amd64 wangsy1007/mediasync115:latest
 docker pull --platform linux/arm64 wangsy1007/mediasync115:latest
 ```
 
-### 3. 使用 compose.yaml 部署
+### 3. 使用 Docker Compose 部署
 
-仓库根目录已经提供官方 [compose.yaml](/Users/wangsy1007/code/MediaSync115/compose.yaml)，默认使用 `latest`，适合 NAS 手动点击更新。
+仓库根目录已经提供官方 [compose.yaml](/Users/wangsy1007/code/MediaSync115/compose.yaml)，默认使用 `latest`，适合 NAS 手动点击更新。你也可以直接使用下面这份配置：
+
+```yaml
+services:
+  mediasync115:
+    image: wangsy1007/mediasync115:latest
+    container_name: mediasync115
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1/healthz', timeout=10)"
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+```
 
 启动：
 
