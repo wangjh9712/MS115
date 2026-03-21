@@ -455,6 +455,23 @@
             </div>
           </template>
 
+          <el-alert
+            type="info"
+            :closable="false"
+            show-icon
+            style="margin-bottom: 16px"
+          >
+            <template #title>
+              <span style="font-weight: 600">如何获取 API ID 和 API HASH？</span>
+            </template>
+            <ol style="margin: 6px 0 0; padding-left: 18px; line-height: 1.8">
+              <li>用浏览器打开 <el-link type="primary" href="https://my.telegram.org" target="_blank">my.telegram.org</el-link>，使用你的 Telegram 手机号登录；</li>
+              <li>登录后点击 <strong>API development tools</strong>；</li>
+              <li>如果是首次使用，需要填写一个应用名称（随意填写即可，如 <em>MyApp</em>），然后提交；</li>
+              <li>页面会显示 <strong>App api_id</strong> 和 <strong>App api_hash</strong>，将它们复制填入下方对应输入框即可。</li>
+            </ol>
+          </el-alert>
+
           <el-form :model="tgForm" label-width="120px">
             <el-form-item label="API ID">
               <el-input v-model="tgForm.apiId" placeholder="Telegram API ID" />
