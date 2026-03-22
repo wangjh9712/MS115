@@ -19,6 +19,7 @@ from app.models.models import (
     SubscriptionStepLog,
 )
 from app.api.search import _normalize_pansou_pan115_list, _search_pansou_pan115_resources
+from app.services.operation_log_service import operation_log_service
 from app.services.emby_service import emby_service
 from app.services.hdhive_service import hdhive_service
 from app.services.nullbr_service import nullbr_service
@@ -179,6 +180,15 @@ class SubscriptionService:
                         step="subscription_done",
                         status="success",
                         message="订阅已自动清理",
+                    )
+                    await operation_log_service.log_background_event(
+                        source_type="background_task",
+                        module="subscriptions",
+                        action="subscription.item.done",
+                        status="success",
+                        message=f"[{sub_title}] 订阅已自动清理（转存完成或已入库）",
+                        trace_id=run_id,
+                        extra={"subscription_id": sub_id, "title": sub_title, "channel": normalized_channel},
                     )
                     await db.commit()
                     continue
@@ -395,6 +405,32 @@ class SubscriptionService:
                     status="success",
                     message="订阅处理完成",
                 )
+                # 构建每部影视的摘要信息
+                item_parts = [f"[{sub_title}]"]
+                item_new = result["new_resource_count"]
+                if should_auto_download:
+                    item_parts.append(
+                        f"新资源 {len(created_records)} 条，"
+                        f"转存成功 {sub_saved_count} 条，失败 {sub_failed_transfer_count} 条"
+                    )
+                else:
+                    item_parts.append(f"新资源 {len(created_records)} 条（未启用自动转存）")
+                await operation_log_service.log_background_event(
+                    source_type="background_task",
+                    module="subscriptions",
+                    action="subscription.item.done",
+                    status="success" if sub_failed_transfer_count == 0 else "warning",
+                    message="，".join(item_parts),
+                    trace_id=run_id,
+                    extra={
+                        "subscription_id": sub_id,
+                        "title": sub_title,
+                        "channel": normalized_channel,
+                        "new_resources": len(created_records),
+                        "auto_saved": sub_saved_count if should_auto_download else None,
+                        "auto_failed": sub_failed_transfer_count if should_auto_download else None,
+                    },
+                )
                 await db.commit()
             except Exception as exc:
                 await db.rollback()
@@ -415,6 +451,20 @@ class SubscriptionService:
                     step="subscription_failed",
                     status="failed",
                     message=f"订阅处理失败: {str(exc)[:300]}",
+                )
+                await operation_log_service.log_background_event(
+                    source_type="background_task",
+                    module="subscriptions",
+                    action="subscription.item.failed",
+                    status="failed",
+                    message=f"[{sub_title}] 订阅处理失败: {str(exc)[:200]}",
+                    trace_id=run_id,
+                    extra={
+                        "subscription_id": sub_id,
+                        "title": sub_title,
+                        "channel": normalized_channel,
+                        "error": str(exc)[:500],
+                    },
                 )
                 await db.commit()
             finally:

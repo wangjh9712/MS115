@@ -139,6 +139,8 @@ const actionLabels = {
   'subscription.run.background.start': '订阅后台任务开始',
   'subscription.run.background.running': '订阅后台任务执行中',
   'subscription.run.background.finish': '订阅后台任务完成',
+  'subscription.item.done': '单项订阅处理完成',
+  'subscription.item.failed': '单项订阅处理失败',
   'explore.queue.subscribe.start': '探索订阅开始',
   'explore.queue.subscribe.finish': '探索订阅完成',
   'explore.queue.save.start': '探索转存开始',
