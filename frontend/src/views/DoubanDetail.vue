@@ -394,6 +394,44 @@
                 <el-empty v-else :description="seedhubMagnetTried ? 'SeedHub 暂无磁力资源' : '尚未获取 SeedHub 资源'" />
               </div>
             </el-tab-pane>
+
+            <el-tab-pane label="不太灵" name="butailing">
+              <div class="resource-tools">
+                <el-button size="small" type="primary" plain :loading="butailingMagnetLoading" @click="fetchButailingMagnet">
+                  {{ butailingMagnetTried ? '刷新不太灵' : '用不太灵获取磁链' }}
+                </el-button>
+              </div>
+              <div v-loading="butailingMagnetLoading">
+                <el-table v-if="butailingMagnetResources.length" :data="pagedButailingMagnetResources" stripe class="resource-table">
+                  <el-table-column label="资源名称" min-width="380" show-overflow-tooltip>
+                    <template #default="{ row }">{{ row.name || '-' }}</template>
+                  </el-table-column>
+                  <el-table-column label="大小" width="120" align="center">
+                    <template #default="{ row }">{{ row.size || '-' }}</template>
+                  </el-table-column>
+                  <el-table-column label="画质" width="120" align="center">
+                    <template #default="{ row }">{{ row.quality || '-' }}</template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="180" align="center" fixed="right">
+                    <template #default="{ row }">
+                      <el-button type="primary" size="small" @click="saveMagnet(row)">离线</el-button>
+                      <el-button size="small" @click="copyMagnet(row.magnet)">复制</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+                <div v-if="butailingMagnetResources.length > pan115PageSize" class="table-pagination">
+                  <el-pagination
+                    background
+                    layout="prev, pager, next"
+                    :total="butailingMagnetResources.length"
+                    :page-size="pan115PageSize"
+                    :current-page="magnetPager.butailing"
+                    @current-change="(page) => (magnetPager.butailing = page)"
+                  />
+                </div>
+                <el-empty v-else :description="butailingMagnetTried ? '不太灵暂无磁力资源' : '尚未获取不太灵资源'" />
+              </div>
+            </el-tab-pane>
           </el-tabs>
         </el-tab-pane>
 
@@ -520,6 +558,8 @@ const magnetLoading = ref(false)
 const nullbrMagnetTried = ref(false)
 const seedhubMagnetLoading = ref(false)
 const seedhubMagnetTried = ref(false)
+const butailingMagnetLoading = ref(false)
+const butailingMagnetTried = ref(false)
 const ed2kLoading = ref(false)
 const ed2kTried = ref(false)
 const selectSaveDialogVisible = ref(false)
@@ -565,7 +605,8 @@ const pan115Pager = ref({
 })
 const magnetPager = ref({
   nullbr: 1,
-  seedhub: 1
+  seedhub: 1,
+  butailing: 1
 })
 const ed2kPager = ref(1)
 const slicePan115Page = (list, page) => {
@@ -583,8 +624,12 @@ const nullbrMagnetResources = computed(() =>
 const seedhubMagnetResources = computed(() =>
   magnetResources.value.filter((item) => item?.source_service === 'seedhub')
 )
+const butailingMagnetResources = computed(() =>
+  magnetResources.value.filter((item) => item?.source_service === 'butailing')
+)
 const pagedNullbrMagnetResources = computed(() => slicePan115Page(nullbrMagnetResources.value, magnetPager.value.nullbr))
 const pagedSeedhubMagnetResources = computed(() => slicePan115Page(seedhubMagnetResources.value, magnetPager.value.seedhub))
+const pagedButailingMagnetResources = computed(() => slicePan115Page(butailingMagnetResources.value, magnetPager.value.butailing))
 const pagedEd2kResources = computed(() => slicePan115Page(ed2kResources.value, ed2kPager.value))
 
 const rewriteTmdbPosterSize = (url) => String(url).replace(/\/t\/p\/[^/]+\//, '/t/p/w500/')
@@ -1123,6 +1168,33 @@ const fetchSeedhubMagnet = async () => {
   }
 }
 
+const fetchButailingMagnet = async () => {
+  if (!detail.value || butailingMagnetLoading.value) return
+  butailingMagnetLoading.value = true
+  butailingMagnetTried.value = true
+  magnetPager.value.butailing = 1
+  try {
+    if (mappedTmdbId.value) {
+      const request = mediaType.value === 'tv'
+        ? searchApi.getTvMagnetButailing(mappedTmdbId.value)
+        : searchApi.getMovieMagnetButailing(mappedTmdbId.value)
+      const { data } = await request
+      const rows = Array.isArray(data?.list) ? data.list : []
+      const normalizedRows = rows.map((item) => ({ ...item, source_service: item?.source_service || 'butailing' }))
+      magnetResources.value = mergeMagnetResources(magnetResources.value, normalizedRows)
+      if (normalizedRows.length === 0) {
+        ElMessage.info('不太灵暂未找到可用磁链')
+      }
+      return
+    }
+    ElMessage.info('当前影视缺少 TMDB 映射，无法通过不太灵搜索')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || error.message || '不太灵磁链获取失败')
+  } finally {
+    butailingMagnetLoading.value = false
+  }
+}
+
 const fetchEd2kResources = async () => {
   if (!detail.value) return
   ed2kTried.value = true
@@ -1542,7 +1614,7 @@ const handleSubscribe = async () => {
 const resetResources = () => {
   pan115Resources.value = []
   pan115Pager.value = { nullbr: 1, pansou: 1, hdhive: 1, tg: 1 }
-  magnetPager.value = { nullbr: 1, seedhub: 1 }
+  magnetPager.value = { nullbr: 1, seedhub: 1, butailing: 1 }
   ed2kPager.value = 1
   magnetResources.value = []
   ed2kResources.value = []
@@ -1558,6 +1630,8 @@ const resetResources = () => {
   nullbrMagnetTried.value = false
   seedhubMagnetLoading.value = false
   seedhubMagnetTried.value = false
+  butailingMagnetLoading.value = false
+  butailingMagnetTried.value = false
   ed2kLoading.value = false
   ed2kTried.value = false
   selectSaveDialogVisible.value = false
@@ -1640,8 +1714,11 @@ watch(pan115SourceTab, async (tab) => {
 watch(magnetSourceTab, async (tab) => {
   if (tab === 'nullbr') magnetPager.value.nullbr = 1
   if (tab === 'seedhub') magnetPager.value.seedhub = 1
+  if (tab === 'butailing') magnetPager.value.butailing = 1
   if (tab === 'seedhub' && seedhubMagnetResources.value.length === 0 && !seedhubMagnetLoading.value && !seedhubMagnetTried.value) {
     await fetchSeedhubMagnet()
+  } else if (tab === 'butailing' && butailingMagnetResources.value.length === 0 && !butailingMagnetLoading.value && !butailingMagnetTried.value) {
+    await fetchButailingMagnet()
   }
 })
 
