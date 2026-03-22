@@ -137,6 +137,100 @@ class Pan115Service:
         """
         result = await self._async_call("fs_index_info")
         return check_response(result)
+
+    @staticmethod
+    def _pick_first_int(source: Any, *keys: str) -> int | None:
+        if not isinstance(source, dict):
+            return None
+        for key in keys:
+            value = source.get(key)
+            if value is None or value == "":
+                continue
+            try:
+                return int(str(value))
+            except Exception:
+                continue
+        return None
+
+    def _normalize_offline_quota_info(self, payload: Any) -> Dict[str, Any]:
+        data = payload if isinstance(payload, dict) else {}
+        nested = data.get("data") if isinstance(data.get("data"), dict) else {}
+
+        total_quota = (
+            self._pick_first_int(nested, "count", "quota", "total", "package_count")
+            if nested else None
+        )
+        if total_quota is None:
+            total_quota = self._pick_first_int(data, "count", "quota", "total", "package_count")
+
+        used_quota = self._pick_first_int(nested, "used", "use", "used_count") if nested else None
+        if used_quota is None:
+            used_quota = self._pick_first_int(data, "used", "use", "used_count")
+
+        remaining_quota = (
+            self._pick_first_int(nested, "remaining", "remain", "left", "surplus")
+            if nested else None
+        )
+        if remaining_quota is None:
+            remaining_quota = self._pick_first_int(data, "remaining", "remain", "left", "surplus")
+
+        if remaining_quota is None and total_quota is not None and used_quota is not None:
+            remaining_quota = max(total_quota - used_quota, 0)
+
+        return {
+            "total_quota": total_quota,
+            "used_quota": used_quota,
+            "remaining_quota": remaining_quota,
+        }
+
+    async def get_offline_quota_info(self) -> Dict[str, Any]:
+        """
+        获取离线下载配额信息
+
+        Returns:
+            配额信息，包含总配额、已用配额、剩余配额
+        """
+        attempts = (
+            ("offline_quota_package_info", {}),
+            ("offline_quota_info", {}),
+            ("offline_quota_info_open", {}),
+        )
+
+        last_error: Exception | None = None
+        for method_name, kwargs in attempts:
+            try:
+                result = await self._async_call(method_name, **kwargs)
+                data = check_response(result)
+                return self._normalize_offline_quota_info(data)
+            except Exception as exc:
+                last_error = exc
+                continue
+
+        raise last_error or RuntimeError("获取离线下载配额失败")
+
+    async def check_offline_quota_valid(self) -> Dict[str, Any]:
+        """
+        检查离线下载配额接口是否可用
+
+        Returns:
+            包含有效状态和配额信息的字典
+        """
+        try:
+            quota_info = await self.get_offline_quota_info()
+            return {
+                "valid": True,
+                "quota_info": quota_info,
+                "message": "离线下载配额获取成功",
+            }
+        except Exception as e:
+            message = str(e)
+            if "重新登录" in message:
+                message = "离线下载接口要求重新登录，请重新扫码登录 115 后再查看配额"
+            return {
+                "valid": False,
+                "quota_info": None,
+                "message": message,
+            }
     
     # ==================== 文件操作 ====================
     

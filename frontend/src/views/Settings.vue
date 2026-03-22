@@ -146,6 +146,26 @@
             </el-descriptions>
           </div>
 
+          <div v-if="cookieStatus.valid && offlineQuotaStatus.checked" class="user-info">
+            <el-divider />
+            <h4>离线下载配额</h4>
+            <el-descriptions v-if="offlineQuotaStatus.valid && offlineQuotaStatus.quota_info" :column="2" border size="small">
+              <el-descriptions-item label="总配额">{{ formatQuotaCount(offlineQuotaStatus.quota_info.total_quota) }}</el-descriptions-item>
+              <el-descriptions-item label="剩余配额">{{ formatQuotaCount(offlineQuotaStatus.quota_info.remaining_quota) }}</el-descriptions-item>
+              <el-descriptions-item label="已用配额">{{ formatQuotaCount(offlineQuotaStatus.quota_info.used_quota) }}</el-descriptions-item>
+              <el-descriptions-item label="状态">
+                <el-tag type="success" size="small">可用</el-tag>
+              </el-descriptions-item>
+            </el-descriptions>
+            <el-alert
+              v-else
+              :title="offlineQuotaStatus.message || '离线下载配额获取失败'"
+              type="warning"
+              :closable="false"
+              show-icon
+            />
+          </div>
+
           <div v-if="cookieStatus.valid" class="default-folder-section">
             <el-divider />
             <h4>转存设置</h4>
@@ -1416,6 +1436,12 @@ const cookieStatus = reactive({
   checked: false,
   user_info: null
 })
+const offlineQuotaStatus = reactive({
+  valid: false,
+  checked: false,
+  quota_info: null,
+  message: ''
+})
 const pan115QrState = reactive({
   token: '',
   qrUrl: '',
@@ -1686,6 +1712,35 @@ const formatSize = (bytes) => {
   return `${size.toFixed(2)} ${units[unitIndex]}`
 }
 
+const formatQuotaCount = (value) => {
+  if (value === null || value === undefined || value === '') return '-'
+  const count = Number(value)
+  if (!Number.isFinite(count)) return String(value)
+  return `${Math.trunc(count)} 个`
+}
+
+const resetOfflineQuotaStatus = () => {
+  offlineQuotaStatus.valid = false
+  offlineQuotaStatus.checked = false
+  offlineQuotaStatus.quota_info = null
+  offlineQuotaStatus.message = ''
+}
+
+const fetchOfflineQuota = async () => {
+  try {
+    const { data } = await pan115Api.getOfflineQuota()
+    offlineQuotaStatus.valid = !!data.valid
+    offlineQuotaStatus.checked = true
+    offlineQuotaStatus.quota_info = data.quota_info || null
+    offlineQuotaStatus.message = data.message || ''
+  } catch (error) {
+    offlineQuotaStatus.valid = false
+    offlineQuotaStatus.checked = true
+    offlineQuotaStatus.quota_info = null
+    offlineQuotaStatus.message = error.response?.data?.detail || '离线下载配额获取失败'
+  }
+}
+
 const fetchCookieInfo = async () => {
   try {
     const { data } = await pan115Api.getCookieInfo()
@@ -1706,10 +1761,16 @@ const checkCookie = async () => {
     connectionResult.message = data.valid
       ? `连接正常：${data.user_info?.user_name || '用户信息已获取'}`
       : `连接异常：${data.message || '请检查Cookie配置'}`
+    if (data.valid) {
+      await fetchOfflineQuota()
+    } else {
+      resetOfflineQuotaStatus()
+    }
   } catch (error) {
     cookieStatus.valid = false
     cookieStatus.checked = true
     cookieStatus.user_info = null
+    resetOfflineQuotaStatus()
     connectionResult.checked = true
     connectionResult.success = false
     connectionResult.message = error.response?.data?.detail || '连接检测失败，请检查Cookie配置'
@@ -1860,6 +1921,7 @@ const handleTestConnection = async () => {
       cookieStatus.valid = true
       cookieStatus.checked = true
       cookieStatus.user_info = data.user_info
+      await fetchOfflineQuota()
       connectionResult.checked = true
       connectionResult.success = true
       connectionResult.message = `连接成功：${data.user_info?.user_name || '用户信息已获取'}`
@@ -1868,6 +1930,7 @@ const handleTestConnection = async () => {
       cookieStatus.valid = false
       cookieStatus.checked = true
       cookieStatus.user_info = null
+      resetOfflineQuotaStatus()
       connectionResult.checked = true
       connectionResult.success = false
       connectionResult.message = `连接失败：${data.message || '请检查Cookie'}`
@@ -1877,6 +1940,7 @@ const handleTestConnection = async () => {
     cookieStatus.valid = false
     cookieStatus.checked = true
     cookieStatus.user_info = null
+    resetOfflineQuotaStatus()
     connectionResult.checked = true
     connectionResult.success = false
     connectionResult.message = '连接失败，请检查Cookie配置'

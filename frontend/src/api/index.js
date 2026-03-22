@@ -288,6 +288,7 @@ export const pan115Api = {
 
   // ==================== 用户信息 ====================
   getUserInfo: () => api.get('/pan115/user'),
+  getOfflineQuota: () => api.get('/pan115/offline/quota'),
   getRiskHealth: () => api.get('/pan115/health/risk'),
 
   // ==================== 文件操作 ====================

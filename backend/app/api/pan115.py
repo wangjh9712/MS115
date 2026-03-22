@@ -477,6 +477,17 @@ async def get_user_info():
         handle_115_error(e)
 
 
+@router.get("/offline/quota")
+async def get_offline_quota():
+    """
+    获取离线下载配额
+
+    返回总配额、已用配额、剩余配额
+    """
+    service = get_service()
+    return await service.check_offline_quota_valid()
+
+
 # ==================== 文件操作 ====================
 
 @router.get("/files")
