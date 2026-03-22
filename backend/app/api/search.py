@@ -25,6 +25,7 @@ from app.services.explore_home_warmup_service import (
     EXPLORE_HOME_WARMUP_LIMIT,
     explore_home_warmup_service,
 )
+from app.services.butailing_service import butailing_service
 from app.services.hdhive_service import hdhive_service
 from app.services.nullbr_service import nullbr_service
 from app.services.pansou_service import pansou_service
@@ -1986,6 +1987,18 @@ async def _search_seedhub_magnet_resources(tmdb_id: int, media_type: str, limit:
     return selected_keyword, []
 
 
+async def _search_butailing_magnet_resources(tmdb_id: int, media_type: str) -> tuple[str, list[dict]]:
+    media_payload = await _load_media_payload(tmdb_id, media_type)
+    keyword_candidates = _build_pansou_keyword_candidates(media_payload, media_type, tmdb_id)
+    selected_keyword = keyword_candidates[0] if keyword_candidates else f"TMDB {tmdb_id}"
+
+    for keyword in keyword_candidates:
+        items = await butailing_service.search_magnets(keyword, media_type=media_type)
+        if items:
+            return keyword, items
+    return selected_keyword, []
+
+
 def _serialize_seedhub_task(task: dict[str, Any]) -> dict[str, Any]:
     items = list(task.get("items") or [])
     return {
@@ -2252,6 +2265,28 @@ async def get_movie_magnet_seedhub(
         "attempts": attempts,
         "keyword": keyword,
         "search_service": "seedhub",
+    }
+
+
+@router.get("/movie/{tmdb_id}/magnet/butailing")
+async def get_movie_magnet_butailing(tmdb_id: int):
+    attempts: list[dict[str, Any]] = []
+    keyword = ""
+    items: list[dict] = []
+
+    try:
+        keyword, items = await _search_butailing_magnet_resources(tmdb_id, "movie")
+        attempts.append({"service": "butailing", "status": "ok", "count": len(items), "keyword": keyword})
+    except Exception as exc:
+        attempts.append({"service": "butailing", "status": "error", "error": str(exc)})
+
+    return {
+        "id": tmdb_id,
+        "media_type": "movie",
+        "list": items,
+        "attempts": attempts,
+        "keyword": keyword,
+        "search_service": "butailing",
     }
 
 
@@ -2741,6 +2776,28 @@ async def get_tv_magnet_seedhub(
         "attempts": attempts,
         "keyword": keyword,
         "search_service": "seedhub",
+    }
+
+
+@router.get("/tv/{tmdb_id}/magnet/butailing")
+async def get_tv_magnet_butailing(tmdb_id: int):
+    attempts: list[dict[str, Any]] = []
+    keyword = ""
+    items: list[dict] = []
+
+    try:
+        keyword, items = await _search_butailing_magnet_resources(tmdb_id, "tv")
+        attempts.append({"service": "butailing", "status": "ok", "count": len(items), "keyword": keyword})
+    except Exception as exc:
+        attempts.append({"service": "butailing", "status": "error", "error": str(exc)})
+
+    return {
+        "id": tmdb_id,
+        "media_type": "tv",
+        "list": items,
+        "attempts": attempts,
+        "keyword": keyword,
+        "search_service": "butailing",
     }
 
 
