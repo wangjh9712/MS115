@@ -14,6 +14,10 @@
 
 tg群：https://t.me/+EkEBz7x7i9NlYzFl
 
+qr code：
+<img width="2088" height="2088" alt="image" src="https://github.com/user-attachments/assets/19c930cc-3a3a-4ba4-b2bb-b9703982efce" />
+
+
 ## Overview
 
 MediaSync115 是一个面向个人媒体库管理的全栈应用，围绕“找片、找资源、转存、订阅、入库同步”构建。
