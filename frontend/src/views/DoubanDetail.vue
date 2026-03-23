@@ -528,10 +528,10 @@ import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { pansouApi, pan115Api, searchApi, subscriptionApi } from '@/api'
 import { Check } from '@element-plus/icons-vue'
-import { getVisibleTabs, isTabVisible } from '@/utils/detailTabs'
+import { getVisibleTabs, loadVisibleTabs, isTabVisible } from '@/utils/detailTabs'
 
 const _visibleTabs = getVisibleTabs()
-const tabVisible = (key) => isTabVisible(_visibleTabs, key)
+const tabVisible = (key) => isTabVisible(_visibleTabs.value, key)
 
 const route = useRoute()
 const loading = ref(false)
@@ -1736,6 +1736,7 @@ watch(() => `${route.params.mediaType || ''}:${route.params.id || ''}`, async ()
 })
 
 onMounted(async () => {
+  loadVisibleTabs()
   await loadDetail()
 })
 </script>

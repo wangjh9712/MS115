@@ -1,4 +1,5 @@
-const STORAGE_KEY = 'detail_visible_tabs'
+import { ref } from 'vue'
+import { settingsApi } from '@/api'
 
 // All available tab definitions with display info
 export const ALL_TABS = [
@@ -16,26 +17,41 @@ export const ALL_TABS = [
 
 const ALL_KEYS = ALL_TABS.map(t => t.key)
 
-export function getVisibleTabs() {
+// Shared reactive state — loaded once, used by all detail pages
+const visibleTabs = ref(new Set(ALL_KEYS))
+let loaded = false
+
+export async function loadVisibleTabs() {
+  if (loaded) return visibleTabs.value
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return new Set(ALL_KEYS)
-    const list = JSON.parse(raw)
-    if (!Array.isArray(list)) return new Set(ALL_KEYS)
-    return new Set(list)
+    const { data } = await settingsApi.getRuntime()
+    const list = data.detail_visible_tabs
+    if (Array.isArray(list)) {
+      visibleTabs.value = new Set(list)
+    }
   } catch {
-    return new Set(ALL_KEYS)
+    // keep default (all visible)
   }
+  loaded = true
+  return visibleTabs.value
 }
 
-export function saveVisibleTabs(keys) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify([...keys]))
+export function getVisibleTabs() {
+  return visibleTabs
+}
+
+export async function saveVisibleTabs(keys) {
+  const arr = [...keys]
+  visibleTabs.value = new Set(arr)
+  loaded = true
+  await settingsApi.updateRuntime({ detail_visible_tabs: arr })
 }
 
 export function isTabVisible(visibleSet, key) {
+  const set = visibleSet instanceof Set ? visibleSet : visibleSet?.value
+  if (!set) return true
   const tab = ALL_TABS.find(t => t.key === key)
   if (!tab) return true
-  // If it's a sub-tab, parent must also be visible
-  if (tab.parent && !visibleSet.has(tab.parent)) return false
-  return visibleSet.has(key)
+  if (tab.parent && !set.has(tab.parent)) return false
+  return set.has(key)
 }

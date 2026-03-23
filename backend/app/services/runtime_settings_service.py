@@ -128,6 +128,11 @@ class RuntimeSettingsService:
             "tg_bot_enabled": False,
             "tg_bot_allowed_users": [],
             "tg_bot_notify_chat_ids": [],
+            "detail_visible_tabs": [
+                "pan115", "pan115_nullbr", "pan115_pansou", "pan115_hdhive", "pan115_tg",
+                "magnet", "magnet_nullbr", "magnet_seedhub", "magnet_butailing",
+                "ed2k",
+            ],
         }
         self._data = dict(self._defaults)
         self._load()
@@ -628,6 +633,11 @@ class RuntimeSettingsService:
                         normalized[key] = int_list
                     continue
 
+                if key == "detail_visible_tabs":
+                    if isinstance(value, list):
+                        normalized[key] = [str(v).strip() for v in value if str(v).strip()]
+                    continue
+
                 source_items: list[str] = []
                 if isinstance(value, str):
                     source_items = [part.strip() for part in value.split(",")]
@@ -791,6 +801,7 @@ class RuntimeSettingsService:
             "tg_bot_enabled": bool(self._data.get("tg_bot_enabled", False)),
             "tg_bot_allowed_users": self._data.get("tg_bot_allowed_users") or [],
             "tg_bot_notify_chat_ids": self._data.get("tg_bot_notify_chat_ids") or [],
+            "detail_visible_tabs": self._data.get("detail_visible_tabs") or [],
         }
 
 

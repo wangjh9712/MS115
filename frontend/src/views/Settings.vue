@@ -1346,7 +1346,7 @@ import { authApi, pan115Api, pansouApi, settingsApi, subscriptionApi } from '@/a
 import { resetAuthSessionCache } from '@/router'
 import { useRouter } from 'vue-router'
 import { formatBeijingDateTime, formatBeijingTableCell } from '@/utils/timezone'
-import { ALL_TABS, getVisibleTabs, saveVisibleTabs } from '@/utils/detailTabs'
+import { ALL_TABS, saveVisibleTabs } from '@/utils/detailTabs'
 
 const router = useRouter()
 const activeSettingsTab = ref('pan115')
@@ -1487,13 +1487,12 @@ const testingProxy = ref(false)
 const savingAccount = ref(false)
 
 // Detail tabs visibility
-const _initVisible = getVisibleTabs()
 const detailTabsForm = reactive({
-  pan115: _initVisible.has('pan115'),
-  pan115_children: ['pan115_nullbr', 'pan115_pansou', 'pan115_hdhive', 'pan115_tg'].filter(k => _initVisible.has(k)),
-  magnet: _initVisible.has('magnet'),
-  magnet_children: ['magnet_nullbr', 'magnet_seedhub', 'magnet_butailing'].filter(k => _initVisible.has(k)),
-  ed2k: _initVisible.has('ed2k'),
+  pan115: true,
+  pan115_children: ['pan115_nullbr', 'pan115_pansou', 'pan115_hdhive', 'pan115_tg'],
+  magnet: true,
+  magnet_children: ['magnet_nullbr', 'magnet_seedhub', 'magnet_butailing'],
+  ed2k: true,
 })
 
 // TG Bot state
@@ -3070,7 +3069,7 @@ const handleCheckTgBotStatus = async () => {
 }
 
 // Detail tabs visibility handlers
-const handleSaveDetailTabs = () => {
+const handleSaveDetailTabs = async () => {
   const keys = new Set()
   if (detailTabsForm.pan115) {
     keys.add('pan115')
@@ -3081,18 +3080,26 @@ const handleSaveDetailTabs = () => {
     detailTabsForm.magnet_children.forEach(k => keys.add(k))
   }
   if (detailTabsForm.ed2k) keys.add('ed2k')
-  saveVisibleTabs(keys)
-  ElMessage.success('详情页标签设置已保存，刷新详情页后生效')
+  try {
+    await saveVisibleTabs(keys)
+    ElMessage.success('详情页标签设置已保存，刷新详情页后生效')
+  } catch {
+    ElMessage.error('保存失败')
+  }
 }
 
-const handleResetDetailTabs = () => {
+const handleResetDetailTabs = async () => {
   detailTabsForm.pan115 = true
   detailTabsForm.pan115_children = ['pan115_nullbr', 'pan115_pansou', 'pan115_hdhive', 'pan115_tg']
   detailTabsForm.magnet = true
   detailTabsForm.magnet_children = ['magnet_nullbr', 'magnet_seedhub', 'magnet_butailing']
   detailTabsForm.ed2k = true
-  saveVisibleTabs(new Set(ALL_TABS.map(t => t.key)))
-  ElMessage.success('已恢复默认设置，刷新详情页后生效')
+  try {
+    await saveVisibleTabs(new Set(ALL_TABS.map(t => t.key)))
+    ElMessage.success('已恢复默认设置，刷新详情页后生效')
+  } catch {
+    ElMessage.error('重置失败')
+  }
 }
 
 const fetchRuntimeSettings = async () => {
@@ -3145,6 +3152,16 @@ const fetchRuntimeSettings = async () => {
     tgBotForm.value.token = data.tg_bot_token || ''
     tgBotForm.value.allowedUsers = Array.isArray(data.tg_bot_allowed_users) ? data.tg_bot_allowed_users : []
     tgBotForm.value.notifyChatIds = Array.isArray(data.tg_bot_notify_chat_ids) ? data.tg_bot_notify_chat_ids : []
+
+    // Detail tabs visibility
+    if (Array.isArray(data.detail_visible_tabs)) {
+      const s = new Set(data.detail_visible_tabs)
+      detailTabsForm.pan115 = s.has('pan115')
+      detailTabsForm.pan115_children = ['pan115_nullbr', 'pan115_pansou', 'pan115_hdhive', 'pan115_tg'].filter(k => s.has(k))
+      detailTabsForm.magnet = s.has('magnet')
+      detailTabsForm.magnet_children = ['magnet_nullbr', 'magnet_seedhub', 'magnet_butailing'].filter(k => s.has(k))
+      detailTabsForm.ed2k = s.has('ed2k')
+    }
 
     schedulerForm.value.nullbr.enabled = !!data.subscription_nullbr_enabled
     schedulerForm.value.nullbr.intervalHours = Number(data.subscription_nullbr_interval_hours || 24)

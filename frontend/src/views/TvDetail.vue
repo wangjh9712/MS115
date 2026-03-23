@@ -709,10 +709,10 @@ import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { searchApi, subscriptionApi, pan115Api } from '@/api'
 import { Star, Plus, Check } from '@element-plus/icons-vue'
-import { getVisibleTabs, isTabVisible } from '@/utils/detailTabs'
+import { getVisibleTabs, loadVisibleTabs, isTabVisible } from '@/utils/detailTabs'
 
 const _visibleTabs = getVisibleTabs()
-const tabVisible = (key) => isTabVisible(_visibleTabs, key)
+const tabVisible = (key) => isTabVisible(_visibleTabs.value, key)
 
 const route = useRoute()
 
@@ -1764,6 +1764,7 @@ watch(() => route.params.id, () => {
 })
 
 onMounted(() => {
+  loadVisibleTabs()
   fetchTv()
   checkSubscribed()
 })
