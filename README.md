@@ -14,8 +14,9 @@
 
 tg群：https://t.me/+EkEBz7x7i9NlYzFl
 
-qr code：
-<img width="2088" height="2088" alt="image" src="https://github.com/user-attachments/assets/19c930cc-3a3a-4ba4-b2bb-b9703982efce" />
+tg群的二维码：
+
+<img width="300" height="300" alt="image" src="https://github.com/user-attachments/assets/19c930cc-3a3a-4ba4-b2bb-b9703982efce" />
 
 
 ## Overview
