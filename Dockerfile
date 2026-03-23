@@ -43,7 +43,7 @@ ENV APP_BUILD_GIT_SHA=${APP_BUILD_GIT_SHA}
 ENV APP_BUILD_TIME=${APP_BUILD_TIME}
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends bash ca-certificates nginx tzdata \
+    && apt-get install -y --no-install-recommends bash ca-certificates curl nginx tzdata \
     && ln -snf "/usr/share/zoneinfo/${TZ}" /etc/localtime \
     && echo "${TZ}" > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
